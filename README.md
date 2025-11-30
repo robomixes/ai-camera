@@ -1,7 +1,8 @@
 # ai-camera
 A flexible, high-performance framework designed to power intelligent camera applications. This system integrates advanced computer vision, real-time image processing, and AI-driven analytics to transform any camera into a smart, automated vision device.
 
-#Key features include:
+# Key features include:
+
 Real-time AI inference for object detection, tracking, and scene analysis
 
 Modular pipeline architecture for customizable camera workflows
