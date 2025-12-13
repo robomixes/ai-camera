@@ -1,5 +1,13 @@
 <Solution>
   <Folder Name="/Solution Items/">
-    <File Path="TextFile1.txt" />
+    <File Path="ai-general.py" />
+    <File Path="ai_features.py" />
+    <File Path="camera_app.py" />
+    <File Path="config.py" />
+    <File Path="db_handler.py" />
+    <File Path="roi_config.txt" />
+    <File Path="roi_detection.db" />
+    <File Path="run_main.sh" />
+    <File Path="yolov8n.pt" />
   </Folder>
 </Solution>
