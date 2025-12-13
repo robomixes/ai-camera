@@ -51,33 +51,17 @@ AI-Camera is ideal for **edge AI**, robotics, surveillance, and IoT applications
 ## 🏗 Architecture Overview
 
 ### High-Level Pipeline
-Camera Source
+- Camera Source
+       ↓
+- Capture Layer
+       ↓
+- Pre-Processing
 ↓
-Capture Layer
+- AI Inference
 ↓
-Pre-Processing
+- Logic & Filtering
 ↓
-AI Inference
-↓
-Logic & Filtering
-↓
-Output / Database
-
----
-
-## 📁 Project Structure
-
-ai-camera/
-├── camera_app.py # Main application loop
-├── ai_general.py # AI model loading and inference
-├── ai_features.py # Detection filtering and logic
-├── config.py # Global configuration
-├── roi_config.txt # Region of Interest definitions
-├── db_handler.py # Database handling
-├── models/
-│ └── yolov8n.pt # Pre-trained AI model
-└── requirements.txt # Python dependencies
-
+- Output / Database
 
 ---
 
@@ -101,6 +85,8 @@ pip install -r requirements.txt
 
 ▶️ Usage
 python camera_app.py
+OR
+run_main.sh
 
 
 Ensure:
