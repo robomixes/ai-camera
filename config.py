@@ -19,6 +19,10 @@ FACE_IMAGE_BASE_DIR = "people_search_queue/ready"
 KNOWN_FACES_DB = os.path.join(FACE_IMAGE_BASE_DIR, "known_faces.json")
 
 # Core Recognition Thresholds
-RECOGNITION_THRESHOLD = 0.8  # If distance is BELOW this, it's a known person.
+RECOGNITION_THRESHOLD = 0.9  # If distance is BELOW this, it's a known person.
 REJECTION_DISTANCE = 1.4     # If distance is ABOVE this, reject the detection as a non-face artifact.
 INPUT_SIZE = (160, 160)      # FaceNet input size
+
+# --- Multi-Frame Aggregation Constants ---
+EMBEDDING_HISTORY_SIZE = 5     # Number of past embeddings to average for stability
+MIN_IOU_THRESHOLD = 0.5         # Minimum IoU overlap required to consider a detection as a continuation of a tracked face
