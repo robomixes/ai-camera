@@ -1,18 +1,129 @@
-# Ai-camera
-A flexible, high-performance framework designed to power intelligent camera applications. This system integrates advanced computer vision, real-time image processing, and AI-driven analytics to transform any camera into a smart, automated vision device.
+# AI-Camera
 
-## Key features:
+## Python-Based Intelligent Vision Framework for Raspberry Pi and Any Camera
 
-- Real-time AI inference for object detection, tracking, and scene analysis
+AI-Camera is an open-source **Python** project designed to turn standard cameras into **AI-powered smart vision systems**.  
+The project is **built around Raspberry Pi and the Pi Camera**, but thanks to its modular architecture, it can be **easily adapted to work with any camera source**, including USB webcams, IP cameras, and industrial cameras.
 
-- Modular pipeline architecture for customizable camera workflows
+AI-Camera is ideal for **edge AI**, robotics, surveillance, and IoT applications.
 
-- Support for multiple camera types (USB, IP, embedded, drone, etc.)
+---
 
-- Edge-optimized processing for low-latency performance on constrained hardware
+## 🚀 Features
 
-- Plug-and-play integration with popular AI/ML models and frameworks
+- Python-based and easy to extend
+- Native support for **Raspberry Pi Camera**
+- Easily adaptable to **USB, IP, and custom cameras**
+- Real-time AI inference (YOLO-based)
+- Modular and scalable architecture
+- Region of Interest (ROI) detection
+- Edge-optimized performance
+- Database logging support
 
-- Event-based triggers and automation for smart surveillance, robotics, and IoT systems
+---
 
-Built for developers creating intelligent vision devices, autonomous systems, or next-generation smart camera solutions.
+## 🧠 AI Capabilities
+
+- Object detection
+- Object filtering by class
+- ROI-based detection logic
+- Event-driven processing
+- Detection result storage
+
+---
+
+## 📷 Camera Support
+
+### Default
+- Raspberry Pi Camera (CSI)
+
+### Easily Adaptable To
+- USB webcams
+- IP / RTSP cameras
+- Industrial cameras
+- Video files (for testing)
+
+> Only the camera capture layer needs modification.  
+> AI inference and processing logic remain unchanged.
+
+---
+
+## 🏗 Architecture Overview
+
+### High-Level Pipeline
+Camera Source
+↓
+Capture Layer
+↓
+Pre-Processing
+↓
+AI Inference
+↓
+Logic & Filtering
+↓
+Output / Database
+
+---
+
+## 📁 Project Structure
+
+ai-camera/
+├── camera_app.py # Main application loop
+├── ai_general.py # AI model loading and inference
+├── ai_features.py # Detection filtering and logic
+├── config.py # Global configuration
+├── roi_config.txt # Region of Interest definitions
+├── db_handler.py # Database handling
+├── models/
+│ └── yolov8n.pt # Pre-trained AI model
+└── requirements.txt # Python dependencies
+
+
+---
+
+## ⚙️ Requirements
+
+- Python 3.8+
+- Raspberry Pi (recommended)
+- Pi Camera (default)
+- OpenCV
+- Ultralytics YOLO
+- Dependencies listed in `requirements.txt`
+
+---
+
+## 🔧 Installation
+
+```bash
+git clone https://github.com/robomixes/ai-camera.git
+cd ai-camera
+pip install -r requirements.txt
+
+▶️ Usage
+python camera_app.py
+
+
+Ensure:
+
+Camera is connected and enabled
+
+Required Python dependencies are installed
+
+🔄 Using a Different Camera
+
+To use a USB or IP camera, modify the camera initialization section in camera_app.py.
+
+Example using OpenCV:
+
+import cv2
+cap = cv2.VideoCapture(0)
+
+No changes are required in:
+
+AI models
+
+Detection logic
+
+ROI configuration
+
+Database handling
