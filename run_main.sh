@@ -1,9 +1,21 @@
 #!/bin/bash
 
-# --- Shell Script to run the Python camera app in a loop ---
+# --- Shell Script to run the Python camera app in a loop (Direct Execution) ---
 
-# Make sure this command points to the correct file name!
-PYTHON_COMMAND="python3 ai-general.py"
+# Define the absolute path to the Python interpreter that contains tflite-runtime.
+# This bypasses the unreliable 'source activate' command.
+PYTHON_EXECUTABLE="/home/admin/env/bin/python"
+PYTHON_SCRIPT="ai-general.py"
+
+# Check if the Python executable exists before running
+if [ ! -f "$PYTHON_EXECUTABLE" ]; then
+    echo "FATAL ERROR: Python executable not found at $PYTHON_EXECUTABLE"
+    echo "Please verify your virtual environment path."
+    exit 1
+fi
+
+# Define the full command
+PYTHON_COMMAND="$PYTHON_EXECUTABLE $PYTHON_SCRIPT"
 
 # Loop continues as long as the python script exits with status 0
 while $PYTHON_COMMAND
@@ -13,4 +25,5 @@ do
     sleep 0.5 
 done
 
+# The 'deactivate' command is not needed here as we never activated the environment.
 echo "Application loop terminated."
