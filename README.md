@@ -72,7 +72,6 @@ AI-Camera is ideal for **edge AI**, robotics, surveillance, and IoT applications
 - Pi Camera (default)
 - OpenCV
 - Ultralytics YOLO
-- Dependencies listed in `requirements.txt`
 
 ---
 
@@ -81,7 +80,6 @@ AI-Camera is ideal for **edge AI**, robotics, surveillance, and IoT applications
 ```bash
 git clone https://github.com/robomixes/ai-camera.git
 cd ai-camera
-pip install -r requirements.txt
 
 ▶️ Usage
 python camera_app.py
