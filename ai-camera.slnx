@@ -5,9 +5,15 @@
     <File Path="camera_app.py" />
     <File Path="config.py" />
     <File Path="db_handler.py" />
+    <File Path="facenet.tflite" />
+    <File Path="face_recognition.py" />
+    <File Path="haarcascade_frontalface_default.xml" />
     <File Path="roi_config.txt" />
-    <File Path="roi_detection.db" />
     <File Path="run_main.sh" />
     <File Path="yolov8n.pt" />
+  </Folder>
+  <Folder Name="/Solution Items/people_search_queue/" />
+  <Folder Name="/Solution Items/people_search_queue/ready/">
+    <File Path="people_search_queue/ready/known_faces.json" />
   </Folder>
 </Solution>
