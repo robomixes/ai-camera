@@ -5,11 +5,10 @@
     <File Path="camera_app.py" />
     <File Path="config.py" />
     <File Path="db_handler.py" />
-    <File Path="docs/service-auto-creation.txt" />
-    <File Path="docs/setup.txt" />
     <File Path="facenet.tflite" />
     <File Path="face_recognition.py" />
     <File Path="haarcascade_frontalface_default.xml" />
+    <File Path="requirements.txt" />
     <File Path="roi_config.txt" />
     <File Path="run_main.sh" />
     <File Path="yolov8n.pt" />
