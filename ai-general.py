@@ -5,6 +5,8 @@ from datetime import datetime
 import os
 import sys
 import numpy as np 
+# --- For Timed Menu ---
+import select 
 
 # --- Imports (Ensure config, ai_features, and db_handler exist) ---
 import config 
@@ -20,8 +22,8 @@ ROI_CONFIG_FILE = "roi_config.txt"
 DIRS_TO_CREATE = [
     config.OUTPUT_DIR, 
     config.ROI_OUTPUT_DIR, 
-    config.FACE_IMAGE_BASE_DIR, # For known faces JSON/images
-    db_handler.EVENT_IMAGE_DIR  # For known face event images
+    config.FACE_IMAGE_BASE_DIR, 
+    db_handler.EVENT_IMAGE_DIR  
 ]
 
 for d in DIRS_TO_CREATE:
@@ -76,13 +78,10 @@ def save_roi(roi):
 
 
 # ----------------------------------------------------------------------
-## 📷 Camera/Capture Functions
+## 📷 Camera/Capture Functions 
 # ----------------------------------------------------------------------
 def initialize_camera():
-    """
-    Initializes and returns the Picamera2 object with a video configuration.
-    Returns (None, None) on failure.
-    """
+    """Initializes and returns the Picamera2 object."""
     try:
         picam2 = Picamera2()
         frame_size = (1280, 720)
@@ -115,15 +114,19 @@ def capture_single_image(picam2, frame_size):
     else:
         print(f"❌ Error saving image to: {output_filename}")
         
-    cv2.imshow('Image Captured', frame_bgr)
-    cv2.waitKey(2000) 
-    cv2.destroyAllWindows()
+    if config.ENABLE_GUI_DISPLAY:
+        cv2.imshow('Image Captured', frame_bgr)
+        cv2.waitKey(2000) 
+        cv2.destroyAllWindows()
 
 def capture_timed_images(picam2, frame_size, interval_seconds=1.0):
     """Captures an image every 'interval_seconds'."""
     print(f"\n--- Timed Capture Started ---")
-    print("Press the **q** key while the preview window is focused to **STOP**.")
-    
+    if config.ENABLE_GUI_DISPLAY:
+        print("Press the **q** key while the preview window is focused to **STOP**.")
+    else:
+        print("Running headless. Press Ctrl+C to STOP.")
+
     last_capture_time = time.time() - interval_seconds
     capture_count = 0
 
@@ -133,12 +136,15 @@ def capture_timed_images(picam2, frame_size, interval_seconds=1.0):
             frame = picam2.capture_array()
             frame_bgr = frame[:, :, ::-1]
             
-            cv2.imshow('Timed Capture - Press q to STOP', frame_bgr)
+            if config.ENABLE_GUI_DISPLAY:
+                cv2.imshow('Timed Capture - Press q to STOP', frame_bgr)
 
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q') or key == 13: 
-                print("\nStop key pressed. Stopping timed capture...")
-                break
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q') or key == 13: 
+                    print("\nStop key pressed. Stopping timed capture...")
+                    break
+            else:
+                 time.sleep(0.01) # Small delay to prevent 100% CPU utilization in headless mode
                 
             if current_time - last_capture_time >= interval_seconds:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -153,10 +159,13 @@ def capture_timed_images(picam2, frame_size, interval_seconds=1.0):
                     
                 last_capture_time = current_time
                 
+    except KeyboardInterrupt:
+        print("\nTimed capture interrupted by Ctrl+C.")
     except Exception as e:
         print(f"An unexpected error occurred during timed capture: {e}")
 
-    cv2.destroyAllWindows()
+    if config.ENABLE_GUI_DISPLAY:
+        cv2.destroyAllWindows()
     print(f"Timed capture finished. {capture_count} images saved.")
 
 def record_video(picam2, frame_size):
@@ -173,7 +182,10 @@ def record_video(picam2, frame_size):
         return
 
     print("\n--- Recording Started ---")
-    print("Press the **q** key or the **Enter** key while the video window is focused to **STOP** recording.")
+    if config.ENABLE_GUI_DISPLAY:
+        print("Press the **q** key or the **Enter** key to **STOP** recording.")
+    else:
+        print("Running headless. Press Ctrl+C to STOP.")
     
     try:
         while True:
@@ -181,28 +193,38 @@ def record_video(picam2, frame_size):
             frame_bgr = frame[:, :, ::-1] 
             
             out.write(frame_bgr)
-            cv2.imshow('Recording - Press q or Enter to STOP', frame_bgr)
             
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q') or key == 13:
-                print("\nStop key pressed. Stopping recording...")
-                break
-            
+            if config.ENABLE_GUI_DISPLAY:
+                cv2.imshow('Recording - Press q or Enter to STOP', frame_bgr)
+                
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q') or key == 13:
+                    print("\nStop key pressed. Stopping recording...")
+                    break
+            else:
+                 time.sleep(0.01)
+
+    except KeyboardInterrupt:
+        print("\nRecording interrupted by Ctrl+C.")
     except Exception as e:
         print(f"An unexpected error occurred during recording: {e}")
 
     out.release()
-    cv2.destroyAllWindows()
+    if config.ENABLE_GUI_DISPLAY:
+        cv2.destroyAllWindows()
     
     print(f"Recording finished. Video saved to: {output_filename}")
 
 def select_roi(picam2):
     """
     Opens a live preview and allows the user to select a Region of Interest (ROI).
-    Saves the successful ROI selection to file.
     """
     global GLOBAL_ROI
     
+    if not config.ENABLE_GUI_DISPLAY:
+        print("\nERROR: ROI selection requires ENABLE_GUI_DISPLAY=True in config.py.")
+        return
+        
     print("\n--- ROI Selection Started ---")
     print("Drag a rectangle on the video window and press **ENTER** or **SPACE** to confirm.")
     
@@ -218,6 +240,7 @@ def select_roi(picam2):
         print(f"Error capturing stable frame for ROI selection: {e}")
         return
 
+    # cv2.selectROI is a blocking function that opens a GUI window.
     roi = cv2.selectROI("Select ROI", frame_bgr, fromCenter=False, showCrosshair=True)
     cv2.destroyAllWindows()
     
@@ -249,15 +272,17 @@ def select_roi(picam2):
 # ----------------------------------------------------------------------
 
 def run_ai_analysis(picam2, frame_size, use_roi=False):
-    """Runs a continuous loop applying YOLOv8 general object detection, conditionally respecting GLOBAL_ROI."""
+    """Runs a continuous loop applying YOLOv8 general object detection."""
     global GLOBAL_ROI
     
     print("\n--- YOLOv8 Analysis Started ---")
+    if config.ENABLE_GUI_DISPLAY:
+        print("Press the **q** key while the video window is focused to **STOP**.")
+    else:
+        print("Running headless. Press Ctrl+C to STOP.")
     
     roi_to_use = GLOBAL_ROI if use_roi else None
     detection_classes = config.DETECTION_CLASSES
-    
-    print("Press the **q** key while the video window is focused to **STOP**.")
     
     last_log_time = time.time() - config.LOG_DELAY_SECONDS
     
@@ -288,17 +313,23 @@ def run_ai_analysis(picam2, frame_size, use_roi=False):
                 last_log_time = time.time()
                 
             # Display frame
-            cv2.imshow('YOLOv8 Detection - Press q to STOP', analyzed_frame)
+            if config.ENABLE_GUI_DISPLAY:
+                cv2.imshow('YOLOv8 Detection - Press q to STOP', analyzed_frame)
+                
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q') or key == 13:
+                    print("\nStop key pressed. Stopping analysis...")
+                    break
+            else:
+                 time.sleep(0.01)
             
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q') or key == 13:
-                print("\nStop key pressed. Stopping analysis...")
-                break
-            
+    except KeyboardInterrupt:
+        print("\nYOLOv8 analysis interrupted by Ctrl+C.")
     except Exception as e:
         print(f"An unexpected error occurred during YOLOv8 analysis: {e}")
 
-    cv2.destroyAllWindows()
+    if config.ENABLE_GUI_DISPLAY:
+        cv2.destroyAllWindows()
     print("YOLOv8 Analysis finished.")
 
 # ----------------------------------------------------------------------
@@ -307,47 +338,91 @@ def run_ai_analysis(picam2, frame_size, use_roi=False):
 
 def run_facenet_analysis(picam2, frame_size):
     """
-    Runs a continuous loop performing Face Detection and Recognition using FaceNet.
+    Runs a continuous loop performing Multi-Frame Face Detection and Recognition.
     """
-    print("\n--- FaceNet Recognition Analysis Started ---")
+    print("\n--- FaceNet Recognition Analysis Started (Multi-Frame) ---")
     
-    # 1. Initialize FaceNet system (model + calculate/load embeddings from image files)
     if not face_recognition.initialize_system():
         print("FATAL: Failed to initialize FaceNet system. Check model and image paths.")
         return
 
-    print("Using FaceNet for Recognition and comparison against config.FACE_IMAGE_BASE_DIR.")
-    print("Press the **q** key while the video window is focused to **STOP**.")
+    print("Using Multi-Frame Aggregation (History Size: {}) for stability.".format(config.EMBEDDING_HISTORY_SIZE))
+    if config.ENABLE_GUI_DISPLAY:
+        print("Press the **q** key while the video window is focused to **STOP**.")
+    else:
+        print("Running headless. Press Ctrl+C to STOP.")
     
     try:
         while True:
             frame_rgb = picam2.capture_array()
             frame_bgr = frame_rgb[:, :, ::-1] 
             
-            # Ensure the frame is uint8 
             if frame_bgr.dtype != np.uint8:
                 frame_bgr = frame_bgr.astype(np.uint8)
             
-            # Run the combined detection and recognition pipeline
+            # 1. Run the combined detection and temporal recognition pipeline
             analyzed_frame, detected_data = face_recognition.run_facenet_recognition(
                 frame_bgr, 
                 frame_size 
             )
             
+            # 2. Check the buffer and log any events whose throttle time has passed
+            face_recognition.process_deferred_logs()
+            
             # Display frame
-            cv2.imshow('FaceNet Recognition - Press q to STOP', analyzed_frame)
+            if config.ENABLE_GUI_DISPLAY:
+                cv2.imshow('FaceNet Recognition - Press q to STOP', analyzed_frame)
+                
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q') or key == 13:
+                    print("\nStop key pressed. Stopping analysis...")
+                    break
+            else:
+                 time.sleep(0.01)
             
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q') or key == 13:
-                print("\nStop key pressed. Stopping analysis...")
-                break
-            
+    except KeyboardInterrupt:
+        print("\nFaceNet Analysis interrupted by Ctrl+C.")
     except Exception as e:
         print(f"An unexpected error occurred during FaceNet Analysis: {e}")
 
-    cv2.destroyAllWindows()
+    if config.ENABLE_GUI_DISPLAY:
+        cv2.destroyAllWindows()
     print("FaceNet Recognition Analysis finished.")
 
+# ----------------------------------------------------------------------
+## 💻 Timed Menu Function (Linux/Unix based)
+# ----------------------------------------------------------------------
+
+def get_menu_choice_with_timeout(timeout, default_choice):
+    """
+    Prompts the user for a menu choice, defaulting to a specified value
+    after a timeout (non-blocking implementation using select).
+    """
+    
+    print(f"\nWaiting for selection... Auto-selecting Option {default_choice} in {timeout} seconds.")
+    
+    # Check if there is data waiting on standard input (sys.stdin)
+    try:
+        # select.select waits until input is available or timeout occurs
+        rlist, _, _ = select.select([sys.stdin], [], [], timeout)
+    except select.error as e:
+        # Handle cases where select is interrupted or fails (e.g., non-TTY environment)
+        print(f"Warning: Select error ({e}). Using default choice.")
+        return default_choice
+    except Exception:
+         # Generic catch-all
+         print("Warning: Timed input failed. Using default choice.")
+         return default_choice
+    
+    if rlist:
+        # Input is available, read the line and return it
+        user_input = sys.stdin.readline().strip()
+        print(f"-> Manual choice selected: {user_input}")
+        return user_input
+    else:
+        # Timeout occurred, no input was received
+        print(f"\n--- Timeout reached. Auto-selecting Option {default_choice}. ---")
+        return default_choice
 
 # ----------------------------------------------------------------------
 ## 🧠 Main User Interaction Loop 
@@ -356,19 +431,17 @@ def run_facenet_analysis(picam2, frame_size):
 def main():
     """Presents the menu and executes one action, then exits the script."""
     
-    # Initialize Database (Ensures all tables exist)
     db_handler.initialize_db()
-    
-    load_roi() # Load persistent ROI at startup
+    load_roi()
     
     global GLOBAL_ROI
     
     print("\n--- Camera Action Selection ---")
     print(
         "What would you like to do?\n"
-        "1. Capture a **single image** (display)\n"
-        "2. Capture an **image every second** (image every second example image 10)\n"
-        "3. **Record a video** (video)\n"
+        "1. Capture a **single image**\n"
+        "2. Capture an **image every second**\n"
+        "3. **Record a video**\n"
         "4. **Set Region of Interest (ROI)**\n"
         "5. **Run Live AI Analysis (Full Frame)**\n"
         "6. **Run Live AI Analysis (Filtered by ROI)**\n"
@@ -376,29 +449,40 @@ def main():
         "8. **Exit**\n" 
     )
     
-    # Display current ROI status
+    # Display current configuration status
     roi_status = f"Current ROI: {GLOBAL_ROI}" if GLOBAL_ROI else "Current ROI: None (Full frame)"
+    display_status = "Enabled (Showing GUI)" if config.ENABLE_GUI_DISPLAY else "Disabled (Headless/No GUI)"
     print(f"\n{roi_status}")
+    print(f"GUI Display: {display_status}")
+    
+    # Print prompt before calling timed function
+    prompt = f"Enter your choice ({config.MENU_DEFAULT_CHOICE} is default): "
+    sys.stdout.write(prompt)
+    sys.stdout.flush() 
 
-    try:
-        choice = input("Enter your choice (1-8): ").strip()
-    except EOFError:
-        choice = '8' 
+    # Get the choice using the timed function
+    choice = get_menu_choice_with_timeout(
+        timeout=config.MENU_TIMEOUT_SECONDS, 
+        default_choice=config.MENU_DEFAULT_CHOICE
+    ).strip()
 
     if choice == '8':
         print("Exiting program.")
-        # FIX: Exit with a non-zero code (99) to stop the Bash script's while loop.
         sys.exit(99) 
     
     # Initialize camera for the chosen action
     picam2, frame_size = None, None
     if choice in ('1', '2', '3', '4', '5', '6', '7'):
+        # Check if GUI is needed for ROI selection
+        if choice == '4' and not config.ENABLE_GUI_DISPLAY:
+             print("\nERROR: Cannot set ROI (Option 4) when ENABLE_GUI_DISPLAY is False.")
+             sys.exit(1)
+             
         picam2, frame_size = initialize_camera()
         
-        # Check for camera failure before proceeding (handles the unpacking error)
         if picam2 is None: 
             print("Failed to start camera. Exiting.")
-            sys.exit(1) # Exit with error code 1 if camera fails
+            sys.exit(1)
     else:
         print("Invalid choice. Exiting.")
         sys.exit(1)
@@ -420,19 +504,23 @@ def main():
             run_ai_analysis(picam2, frame_size, use_roi=True)
         elif choice == '7':
             run_facenet_analysis(picam2, frame_size)
+        else:
+            print(f"Option {choice} is not recognized.")
             
     except KeyboardInterrupt:
         print("\nOperation interrupted by user.")
     finally:
-        # Final cleanup for all successful operations
         print("Stopping camera...")
         if picam2 is not None:
             picam2.stop()
-            del picam2 
+            try:
+                del picam2 
+            except Exception:
+                 pass 
+        
         cv2.destroyAllWindows()
         
     print("\n--- Action Finished ---\n")
-    # All successful actions finish with status 0, which triggers a restart in run_main.sh
     sys.exit(0)
 
 

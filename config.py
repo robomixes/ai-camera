@@ -26,3 +26,12 @@ INPUT_SIZE = (160, 160)      # FaceNet input size
 # --- Multi-Frame Aggregation Constants ---
 EMBEDDING_HISTORY_SIZE = 5     # Number of past embeddings to average for stability
 MIN_IOU_THRESHOLD = 0.5         # Minimum IoU overlap required to consider a detection as a continuation of a tracked face
+
+# --- NEW: Display Configuration ---
+ENABLE_GUI_DISPLAY = False   # Set to False to run headless (no windows shown)
+
+# config.py (Additions)
+
+# --- Menu Settings ---
+MENU_TIMEOUT_SECONDS = 25  # Number of seconds to wait before auto-selecting
+MENU_DEFAULT_CHOICE = '7'  # The default option to pick on timeout (e.g., '1' for Camera Feed)
