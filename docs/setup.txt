@@ -1,0 +1,65 @@
+1. Deactivate the Current Environment
+
+The command to exit your current Python virtual environment is simple and universal.
+Bash
+
+deactivate
+
+******************************************************************************************
+
+
+2. Create the New Environment
+
+We will use venv (the standard Python module) to create the new environment named camera_env.
+Bash
+
+# Make sure you are in the directory where you want the environment stored (e.g., /home/admin/)
+
+# Execute the creation command
+/usr/bin/python3 -m venv camera_env
+
+
+
+******************************************************************************************
+
+
+3.Activate the New Environment
+
+You must activate the environment before installing packages so they are installed locally inside camera_env.
+Bash
+
+source camera_env/bin/activate
+
+
+******************************************************************************************
+4. Install Required Packages
+
+The packages for your project include hardware interfaces, computer vision libraries, and AI model backends.
+
+    Assumption: You have a requirements.txt file listing all necessary packages (like opencv-python, picamera2, numpy, tensorflow-lite, etc.).
+
+Bash
+
+# 1. Install pip upgrade (optional but recommended)
+pip install --upgrade pip
+
+# 2. Install packages from your requirements file
+# Assuming your requirements.txt is in your project directory
+cd /home/admin/camera-project/ 
+pip install -r requirements.txt
+
+# 3. Manually ensure picamera2 is installed (it often has separate dependencies)
+pip install picamera2
+
+***************************************************************************************
+
+5. Verify the New Setup
+
+Check that the new Python executable path is correct and the necessary packages are available.
+Bash
+
+# Check the Python executable path
+which python
+
+# Check the TensorFlow Lite runtime is installed
+pip show tflite-runtime
