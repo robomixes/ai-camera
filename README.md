@@ -110,6 +110,13 @@ ROI configuration
 Database handling
 
 ## Menu
-<img width="517" height="376" alt="camera-api-1" src="https://github.com/user-attachments/assets/90a3526c-7520-4c7a-a054-45296e49843c" />
+
+
+<img width="517" height="281" alt="camera-api-1" src="https://github.com/user-attachments/assets/13138c5f-5f52-4ecd-8cc0-cfc4a79762f8" />
+![camera-api-1](https://github.com/user-attachments/assets/13138c5f-5f52-4ecd-8cc0-cfc4a79762f8)
+
+## settings
+
+<img width="903" height="511" alt="camera-api-2" src="https://github.com/user-attachments/assets/20461cd3-ddbb-47cd-8960-c385cd1b6fc0" />
 
 
