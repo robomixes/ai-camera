@@ -13,6 +13,10 @@
     <File Path="run_main.sh" />
     <File Path="yolov8n.pt" />
   </Folder>
+  <Folder Name="/Solution Items/assets/">
+    <File Path="assets/camera-api-1.png" />
+    <File Path="assets/camera-api-2.png" />
+  </Folder>
   <Folder Name="/Solution Items/docs/">
     <File Path="docs/service-auto-creation.txt" />
     <File Path="docs/setup.txt" />
