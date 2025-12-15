@@ -67,12 +67,9 @@ AI-Camera is ideal for **edge AI**, robotics, surveillance, and IoT applications
 
 ## ⚙️ Requirements
 
-- Python 3.8+
-- Raspberry Pi (recommended)
-- Pi Camera (default)
-- OpenCV
-- Ultralytics YOLO
-
+- All needed requirments are availabe in requirements.txt
+- This document will explain the setup setp by step: docs/setup.txt
+- This document will explain the auto service setup on the pi: docs/service-auto-creation.txt
 ---
 
 ## 🔧 Installation
@@ -111,3 +108,8 @@ Detection logic
 ROI configuration
 
 Database handling
+
+## Menu
+<img width="517" height="376" alt="camera-api-1" src="https://github.com/user-attachments/assets/90a3526c-7520-4c7a-a054-45296e49843c" />
+
+
