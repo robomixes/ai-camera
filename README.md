@@ -109,9 +109,12 @@ ROI configuration
 
 Database handling
 
+```
+
 ## Menu
 
 ![camera-api-1](assets/camera-api-1.png)
+
 
 ## settings
 
