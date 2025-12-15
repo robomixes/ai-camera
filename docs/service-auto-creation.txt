@@ -1,0 +1,78 @@
+
+step1 : 
+sudo nano /etc/systemd/system/camera-ai.service
+
+*********************************************************************
+Step 2:
+
+[Unit]
+Description=Raspberry Pi Camera AI Analysis Service (Virtual Environment)
+# Wait until the network is up before starting the service
+After=network.target
+
+[Service]
+# Run the script as the 'admin' user (Crucial for file permissions and access)
+User=admin 
+# The directory where ai-general.py is located. 
+# We assume this is where you want relative paths (e.g., config files) to resolve.
+WorkingDirectory=/home/admin/cameraapp/ 
+
+# The core command: Use the specific Python interpreter from the virtual environment
+# ExecStart = [PYTHON_EXECUTABLE] [PYTHON_SCRIPT_PATH]
+ExecStart=/home/admin/env/bin/python /home/admin/cameraapp/ai-general.py 
+
+# The service should automatically restart if it crashes (e.g., due to a bug or memory issue)
+Restart=always
+# Wait 10 seconds before attempting a restart
+RestartSec=10  
+
+[Install]
+# Enable the service for multi-user system boot
+WantedBy=multi-user.target
+
+*********************************************************************
+
+step3: Enable and Start the Service
+
+Once the file is saved, you need to tell systemd about the new service and then enable it to start automatically on future boots.
+1. Reload the systemd Manager
+Bash
+
+sudo systemctl daemon-reload
+
+2. Enable the Service (Auto-start on boot)
+Bash
+
+sudo systemctl enable camera-ai.service
+
+3. Start the Service Immediately (Test run)
+Bash
+
+sudo systemctl start camera-ai.service
+
+*********************************************************************
+
+Setp4: Verification
+
+Use the journalctl command to check the startup logs and ensure the script is executing correctly within the virtual environment and selecting the default menu option.
+Check Service Status:
+Bash
+
+sudo systemctl status camera-ai.service
+
+View Live Logs:
+Bash
+
+sudo journalctl -u camera-ai.service -f
+
+*********************************************************************
+
+step5: Delete the Service (Remove Permanently)
+
+To completely remove the service, you must first disable it, then delete the service file, and finally, reload systemd.
+Step	Command	Description
+3a. Stop	sudo systemctl stop camera-ai.service	Ensure the service is not running.
+3b. Disable	sudo systemctl disable camera-ai.service	Prevent auto-start on next boot.
+3c. Delete File	sudo rm /etc/systemd/system/camera-ai.service	Permanently delete the configuration file.
+3d. Reload	sudo systemctl daemon-reload	Tell systemd to drop the service configuration from its memory.
+3e. Check	sudo systemctl reset-failed	(Optional) Clear the failed status from the system log.

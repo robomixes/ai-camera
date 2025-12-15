@@ -5,10 +5,10 @@ from datetime import datetime
 import os
 import sys
 import numpy as np 
-# --- For Timed Menu ---
+# --- For Timed Menu (Requires 'select' module, common on Linux/RPi) ---
 import select 
 
-# --- Imports (Ensure config, ai_features, and db_handler exist) ---
+# --- Imports (Ensure config, ai_features, db_handler, and face_recognition exist) ---
 import config 
 import ai_features
 import db_handler
@@ -390,7 +390,7 @@ def run_facenet_analysis(picam2, frame_size):
     print("FaceNet Recognition Analysis finished.")
 
 # ----------------------------------------------------------------------
-## 💻 Timed Menu Function (Linux/Unix based)
+## 💻 Timed Menu Function (Linux/Unix based, with Empty Input Fix)
 # ----------------------------------------------------------------------
 
 def get_menu_choice_with_timeout(timeout, default_choice):
@@ -401,22 +401,27 @@ def get_menu_choice_with_timeout(timeout, default_choice):
     
     print(f"\nWaiting for selection... Auto-selecting Option {default_choice} in {timeout} seconds.")
     
-    # Check if there is data waiting on standard input (sys.stdin)
     try:
         # select.select waits until input is available or timeout occurs
         rlist, _, _ = select.select([sys.stdin], [], [], timeout)
-    except select.error as e:
-        # Handle cases where select is interrupted or fails (e.g., non-TTY environment)
-        print(f"Warning: Select error ({e}). Using default choice.")
+    except select.error:
+        # This handles cases where select fails in a non-interactive environment (non-fatal)
+        print("Warning: Timed input failed. Using default choice.")
         return default_choice
     except Exception:
-         # Generic catch-all
          print("Warning: Timed input failed. Using default choice.")
          return default_choice
     
     if rlist:
-        # Input is available, read the line and return it
+        # Input is available, read the line and strip whitespace/newlines
         user_input = sys.stdin.readline().strip()
+        
+        # --- FIX: Treat empty input (like residual '\n' from systemd/pipe) as a timeout ---
+        if not user_input:
+            print(f"--- Input detected but was empty. Auto-selecting Option {default_choice}. ---")
+            return default_choice
+        
+        # Return the valid manual choice
         print(f"-> Manual choice selected: {user_input}")
         return user_input
     else:
@@ -484,6 +489,7 @@ def main():
             print("Failed to start camera. Exiting.")
             sys.exit(1)
     else:
+        # This catches invalid characters/numbers after the timed menu selection
         print("Invalid choice. Exiting.")
         sys.exit(1)
 
@@ -505,6 +511,7 @@ def main():
         elif choice == '7':
             run_facenet_analysis(picam2, frame_size)
         else:
+            # Should be unreachable if the 'else' above is hit, but kept for robustness
             print(f"Option {choice} is not recognized.")
             
     except KeyboardInterrupt:
