@@ -111,9 +111,7 @@ Database handling
 
 ## Menu
 
-
-<img width="517" height="281" alt="camera-api-1" src="https://github.com/user-attachments/assets/13138c5f-5f52-4ecd-8cc0-cfc4a79762f8" />
-![camera-api-1](https://github.com/user-attachments/assets/13138c5f-5f52-4ecd-8cc0-cfc4a79762f8)
+![camera-api-1](assets/camera-api-1.png)
 
 ## settings
 
