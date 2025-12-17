@@ -11,24 +11,36 @@ AI-Camera is ideal for **edge AI**, robotics, surveillance, and IoT applications
 
 ## 🚀 Features
 
-- Python-based and easy to extend
-- Native support for **Raspberry Pi Camera**
-- Easily adaptable to **USB, IP, and custom cameras**
-- Real-time AI inference (YOLO-based)
-- Modular and scalable architecture
-- Region of Interest (ROI) detection
-- Edge-optimized performance
-- Database logging support
+- Real-time AI inference using YOLO-based object detection
+- Built-in **person detection and people searching**
+- Integrated **face detection** module
+- Support for **Region of Interest (ROI)**-based logic
+- Modular and extensible Python architecture
+- Database logging for detections and events
+- Designed to run continuously as a Linux service (systemd) on Raspberry Pi
+- Easy adaptation to different camera sources
 
 ---
 
-## 🧠 AI Capabilities
+## 🧠Supported AI Capabilities
+## Object Detection
 
-- Object detection
-- Object filtering by class
-- ROI-based detection logic
-- Event-driven processing
-- Detection result storage
+- General object detection using YOLO models
+- Class-based filtering (e.g. detect only person)
+- Optimized for real-time performance on edge devices
+
+## Person Detection & Searching
+
+- Detects people in mixed environments
+- Supports ROI-based searching (detect people only in defined areas)
+- Can be used for tracking, monitoring, or triggering actions
+
+## Face Detection
+
+- Dedicated face detection module
+- Uses classical Haarcascade or AI-based methods (configurable)
+- Detects faces independently from general object detection
+- Suitable for access control, monitoring, and human–robot interaction
 
 ---
 
