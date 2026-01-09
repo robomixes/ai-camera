@@ -246,7 +246,7 @@ def clean_stale_tracks(max_age_seconds=0.5): # FIX 1: Reduced Track Age to 0.5s
                  
                  timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                  image_filename = f"faces_final_{track_name}_{timestamp_str}.jpg"
-                 full_image_path = os.path.join(db_handler.EVENT_IMAGE_DIR, image_filename)
+                 full_image_path = os.path.join(config.EVENT_IMAGE_DIR, image_filename)
                  
                  # Save the best frame found
                  cv2.imwrite(full_image_path, entry['best_frame'])
@@ -318,7 +318,7 @@ def process_deferred_logs():
                 
                 timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 image_filename = f"faces_best_{name}_{timestamp_str}.jpg"
-                full_image_path = os.path.join(db_handler.EVENT_IMAGE_DIR, image_filename)
+                full_image_path = os.path.join(config.EVENT_IMAGE_DIR, image_filename)
                 
                 # Save the best frame found
                 cv2.imwrite(full_image_path, entry['best_frame'])

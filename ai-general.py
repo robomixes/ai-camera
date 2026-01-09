@@ -23,7 +23,7 @@ DIRS_TO_CREATE = [
     config.OUTPUT_DIR, 
     config.ROI_OUTPUT_DIR, 
     config.FACE_IMAGE_BASE_DIR, 
-    db_handler.EVENT_IMAGE_DIR  
+    config.EVENT_IMAGE_DIR  
 ]
 
 for d in DIRS_TO_CREATE:

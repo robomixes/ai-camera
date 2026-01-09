@@ -1,107 +1,114 @@
-# db_handler.py
+# db_handler.py - Handles SQLite logging with GPS, Camera ID, and Configurable Paths
 
 import sqlite3
-import datetime
 import os
-import config # Using config for potential future needs
-
-DB_NAME = "ai_events.db"
-# Define the path where the known face event images will be saved
-EVENT_IMAGE_DIR = "known_face_events"
-
-# Ensure the event directory exists
-if not os.path.exists(EVENT_IMAGE_DIR):
-    os.makedirs(EVENT_IMAGE_DIR)
+import config  # Pulls DB_NAME, EVENT_IMAGE_DIR, CAMERA_ID, and GPS info
 
 def initialize_db():
-    """
-    Initializes the database and creates necessary tables.
+    """Creates the SQLite database and tables based on paths in config.py."""
     
-    NOTE: SQLite does not allow direct column modification (ALTER TABLE). 
-    If you change a column type (like min_distance from REAL to TEXT), 
-    you must manually rename or delete the old table before running this function.
-    """
-    conn = sqlite3.connect(DB_NAME)
+    # Ensure the event image directory exists
+    if not os.path.exists(config.EVENT_IMAGE_DIR):
+        os.makedirs(config.EVENT_IMAGE_DIR)
+        print(f"Created directory: {config.EVENT_IMAGE_DIR}")
+
+    conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
     
-    # 1. YOLO/ROI Detection Events Table (Unchanged)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS roi_detections (
-            id INTEGER PRIMARY KEY,
-            timestamp TEXT,
-            data TEXT,
-            roi TEXT,
-            image_file TEXT
+    print(f"Initializing database: {config.DB_NAME}")
+
+    # 1. Table for General YOLO Detections
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS detections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            camera_id TEXT,
+            latitude REAL,
+            longitude REAL,
+            object_type TEXT,
+            confidence REAL,
+            roi_box TEXT,
+            image_path TEXT
         )
-    """)
-    
-    # 2. Face Recognition Events Table
-    # min_distance is now explicitly TEXT as requested.
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS face_recognition_events (
-            id INTEGER PRIMARY KEY,
-            timestamp TEXT,
-            name TEXT NOT NULL,
-            confidence REAL NOT NULL, 
-            is_known BOOLEAN NOT NULL,
-            min_distance TEXT, 
-            image_file TEXT,
-            is_processed BOOLEAN DEFAULT 0
+    ''')
+
+    # 2. Table for Face Recognition Events
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS face_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            camera_id TEXT,
+            latitude REAL,
+            longitude REAL,
+            person_name TEXT,
+            distance TEXT,
+            image_path TEXT,
+            is_known INTEGER
         )
-    """)
+    ''')
     
     conn.commit()
     conn.close()
+    print("Database tables verified.")
 
 def log_detection(detection_data, roi_area, image_filename):
-    """Logs a general YOLO detection event (used by Option 6)."""
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    
+    """Logs general object detections using config-defined paths and ID."""
     try:
-        cursor.execute("""
-            INSERT INTO roi_detections 
-            (timestamp, data, roi, image_file)
-            VALUES (?, ?, ?, ?)
-        """, (timestamp, str(detection_data), str(roi_area), image_filename))
+        conn = sqlite3.connect(config.DB_NAME)
+        cursor = conn.cursor()
+        
+        for obj in detection_data:
+            cursor.execute('''
+                INSERT INTO detections (
+                    camera_id, latitude, longitude, object_type, 
+                    confidence, roi_box, image_path
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                config.CAMERA_ID, 
+                config.GPS_LATITUDE, 
+                config.GPS_LONGITUDE,
+                obj['class'], 
+                obj['confidence'], 
+                str(roi_area), 
+                image_filename
+            ))
         
         conn.commit()
-    except sqlite3.Error as e:
-        print(f"ERROR: Failed to log ROI detection event: {e}")
-    finally:
         conn.close()
-
+    except Exception as e:
+        print(f"Error logging detection to DB: {e}")
 
 def log_face_detection_event(name, distance, image_filename, is_known):
-    """
-    Logs a face recognition event to the database.
-    Converts 'distance' (float) to a TEXT string before saving.
-    """
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    # Confidence is 1 - L2 distance (higher is better)
-    confidence = 1.0 - distance 
-    
-    # --- CONVERT DISTANCE TO TEXT ---
-    # Format the float as a string with high precision (10 decimal places)
-    # This value will be saved into the min_distance TEXT column.
-    distance_text = f"{distance:.10f}" 
-    
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    
+    """Logs a Face Recognition event using config-defined paths and ID."""
     try:
-        cursor.execute("""
-            INSERT INTO face_recognition_events 
-            (timestamp, name, confidence, is_known, min_distance, image_file)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (timestamp, name, confidence, is_known, distance_text, image_filename))
+        conn = sqlite3.connect(config.DB_NAME)
+        cursor = conn.cursor()
+        
+        distance_text = f"{distance:.4f}"
+                
+        cursor.execute('''
+            INSERT INTO face_events (
+                camera_id, latitude, longitude, person_name, 
+                distance, image_path, is_known
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            config.CAMERA_ID, 
+            config.GPS_LATITUDE, 
+            config.GPS_LONGITUDE,
+            name, 
+            distance_text, 
+            image_filename, 
+            1 if is_known else 0
+        ))
         
         conn.commit()
-        print(f"DATABASE: Logged face event for {name} (Conf: {confidence:.2f})")
-        
-    except sqlite3.Error as e:
-        print(f"ERROR: Failed to log face recognition event: {e}")
-        
-    finally:
         conn.close()
+        print(f"Logged Face Event: {name} from {config.CAMERA_ID}")
+    except Exception as e:
+        print(f"Error logging face event to DB: {e}")
+
+# Run initialization if script is executed directly
+if __name__ == "__main__":
+    initialize_db()

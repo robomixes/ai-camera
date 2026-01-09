@@ -1,10 +1,23 @@
 # config.py
 
 import os
+
+# --- Camera Identity & Location ---
+CAMERA_ID = "CAM_001"
+CAMERA_DESCRIPTION = "Front Gate - North Entrance"
+
+# GPS Coordinates (Static location for this installation)
+GPS_LATITUDE = 48.8584
+GPS_LONGITUDE = 2.2945
+
 # --- General Configuration ---
 OUTPUT_DIR = "output_images"
 ROI_OUTPUT_DIR = "roi_events"
-LOG_DELAY_SECONDS = 5.0 
+LOG_DELAY_SECONDS = 5.0
+
+# --- Database & Storage Settings ---
+DB_NAME = "detections_history.db"
+EVENT_IMAGE_DIR = "event_images"
 
 # Example: Filter for people/car detection only
 DETECTION_CLASSES = ['person']
