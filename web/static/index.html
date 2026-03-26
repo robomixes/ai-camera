@@ -16,6 +16,7 @@
         <nav class="tab-nav">
             <button class="tab-btn active" data-tab="live">Live</button>
             <button class="tab-btn" data-tab="events">Events <span id="events-badge" class="tab-badge">0</span></button>
+            <button class="tab-btn" data-tab="faces">Faces</button>
         </nav>
         <div class="header-right">
             <span id="status-dot" class="status-dot disconnected"></span>
@@ -172,6 +173,45 @@
             <!-- Events Grid -->
             <div id="events-grid" class="events-grid">
                 <div class="no-data">Loading events...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== FACES TAB ===== -->
+    <div id="tab-faces" class="tab-content">
+        <div class="faces-page">
+            <!-- Enrollment Form -->
+            <div class="card enroll-card">
+                <div class="card-header">Enroll New Face</div>
+                <div class="card-body">
+                    <form id="enroll-form" class="enroll-form" onsubmit="enrollFace(event)">
+                        <div class="enroll-row">
+                            <div class="enroll-field">
+                                <label for="enroll-name">Person Name</label>
+                                <input type="text" id="enroll-name" placeholder="e.g. John" required>
+                            </div>
+                            <div class="enroll-field">
+                                <label for="enroll-files">Face Photos</label>
+                                <input type="file" id="enroll-files" accept="image/*" multiple required>
+                            </div>
+                            <label class="enroll-checkbox">
+                                <input type="checkbox" id="enroll-crop" checked>
+                                <span>Auto-crop faces</span>
+                            </label>
+                            <button type="submit" class="btn-enroll" id="btn-enroll">Enroll</button>
+                        </div>
+                        <div id="enroll-status" class="enroll-status"></div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- People Grid -->
+            <div class="faces-header">
+                <h3>Enrolled People</h3>
+                <button class="btn-refresh" onclick="loadFaces()">Refresh</button>
+            </div>
+            <div id="faces-grid" class="faces-grid">
+                <div class="no-data">Loading...</div>
             </div>
         </div>
     </div>

@@ -1,20 +1,26 @@
 import asyncio
 import json
+import os
+import threading
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import StreamingResponse, JSONResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 
 import config
 import db_handler
+import face_recognition as face_rec
 from camera import create_camera
 from camera.base import CameraBase
 from web.ai_runner import AIRunner
 from web.utils import encode_jpeg, resize_frame
+
+_faces_lock = threading.Lock()
 
 # --- Globals set during lifespan ---
 _cam: CameraBase | None = None
@@ -172,13 +178,162 @@ def create_app() -> FastAPI:
                 _ai_runner.mode = mode
         return {"mode": mode}
 
+    # --- Face Enrollment API ---
+    faces_dir = Path(config.FACE_IMAGE_BASE_DIR)
+    faces_dir.mkdir(parents=True, exist_ok=True)
+    faces_json = Path(config.KNOWN_FACES_DB)
+
+    def _read_faces_json() -> dict:
+        if faces_json.exists():
+            with open(faces_json, 'r') as f:
+                return json.load(f)
+        return {}
+
+    def _write_faces_json(data: dict) -> None:
+        with open(faces_json, 'w') as f:
+            json.dump(data, f, indent=2)
+
+    @app.get("/api/faces")
+    async def list_faces():
+        with _faces_lock:
+            db = _read_faces_json()
+        people = []
+        for name, images in db.items():
+            people.append({
+                "name": name,
+                "images": images,
+                "image_count": len(images),
+                "thumbnail": f"/images/faces/{images[0]}" if images else None,
+            })
+        return {"people": people}
+
+    @app.post("/api/faces/enroll")
+    async def enroll_face(name: str = Form(...), files: list[UploadFile] = File(...),
+                          crop_faces: bool = Form(False)):
+        import cv2
+        import numpy as np
+
+        if not name or not name.strip():
+            return JSONResponse({"error": "Name is required"}, status_code=400)
+        name = name.strip()
+
+        # Load Haar Cascade for face cropping
+        face_detector = None
+        if crop_faces:
+            cascade_path = "haarcascade_frontalface_default.xml"
+            if os.path.exists(cascade_path):
+                face_detector = cv2.CascadeClassifier(cascade_path)
+
+        saved_files = []
+        skipped = 0
+        for i, file in enumerate(files):
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            content = await file.read()
+
+            if crop_faces and face_detector is not None:
+                # Decode image and detect faces
+                nparr = np.frombuffer(content, np.uint8)
+                img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                if img is None:
+                    skipped += 1
+                    continue
+
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                faces = face_detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60))
+
+                if len(faces) == 0:
+                    skipped += 1
+                    continue
+
+                # Save each detected face as a separate cropped image
+                for j, (x, y, w, h) in enumerate(faces):
+                    # Add padding around the face (20%)
+                    pad = int(max(w, h) * 0.2)
+                    x1 = max(0, x - pad)
+                    y1 = max(0, y - pad)
+                    x2 = min(img.shape[1], x + w + pad)
+                    y2 = min(img.shape[0], y + h + pad)
+                    face_crop = img[y1:y2, x1:x2]
+
+                    filename = f"enroll_{name}_{ts}_{i}_face{j}.jpg"
+                    filepath = faces_dir / filename
+                    cv2.imwrite(str(filepath), face_crop)
+                    saved_files.append(filename)
+            else:
+                # Save original image as-is
+                ext = Path(file.filename).suffix or ".jpg"
+                filename = f"enroll_{name}_{ts}_{i}{ext}"
+                filepath = faces_dir / filename
+                with open(filepath, "wb") as f:
+                    f.write(content)
+                saved_files.append(filename)
+
+        if not saved_files:
+            return JSONResponse(
+                {"error": f"No faces detected in uploaded images ({skipped} skipped)"},
+                status_code=400
+            )
+
+        with _faces_lock:
+            db = _read_faces_json()
+            if name not in db:
+                db[name] = []
+            db[name].extend(saved_files)
+            _write_faces_json(db)
+            # Reload embeddings
+            face_rec.load_known_faces_from_images()
+
+        return {"name": name, "added": saved_files, "total_images": len(db[name])}
+
+    @app.delete("/api/faces/{name}")
+    async def delete_person(name: str):
+        with _faces_lock:
+            db = _read_faces_json()
+            if name not in db:
+                return JSONResponse({"error": f"Person '{name}' not found"}, status_code=404)
+
+            # Delete image files
+            for img in db[name]:
+                img_path = faces_dir / img
+                if img_path.exists():
+                    img_path.unlink()
+
+            del db[name]
+            _write_faces_json(db)
+            face_rec.load_known_faces_from_images()
+
+        return {"deleted": name}
+
+    @app.delete("/api/faces/{name}/image/{filename}")
+    async def delete_person_image(name: str, filename: str):
+        with _faces_lock:
+            db = _read_faces_json()
+            if name not in db:
+                return JSONResponse({"error": f"Person '{name}' not found"}, status_code=404)
+            if filename not in db[name]:
+                return JSONResponse({"error": f"Image '{filename}' not found"}, status_code=404)
+
+            db[name].remove(filename)
+            img_path = faces_dir / filename
+            if img_path.exists():
+                img_path.unlink()
+
+            # Remove person if no images left
+            if not db[name]:
+                del db[name]
+
+            _write_faces_json(db)
+            face_rec.load_known_faces_from_images()
+
+        return {"name": name, "deleted_image": filename}
+
     # --- Serve event images ---
-    import os
     event_img_dir = Path(config.EVENT_IMAGE_DIR)
     roi_img_dir = Path(config.ROI_OUTPUT_DIR)
     for d in (event_img_dir, roi_img_dir):
         d.mkdir(parents=True, exist_ok=True)
 
+    app.mount("/images/faces", StaticFiles(directory=str(faces_dir)), name="face_images")
     app.mount("/images/events", StaticFiles(directory=str(event_img_dir)), name="event_images")
     app.mount("/images/roi", StaticFiles(directory=str(roi_img_dir)), name="roi_images")
 

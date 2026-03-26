@@ -864,6 +864,266 @@ header h1 {
     background: rgba(0, 212, 255, 0.1);
 }
 
+/* ===== Faces Page ===== */
+.faces-page {
+    padding: 16px;
+}
+
+.enroll-card {
+    margin-bottom: 20px;
+}
+
+.enroll-form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.enroll-row {
+    display: flex;
+    gap: 12px;
+    align-items: flex-end;
+    flex-wrap: wrap;
+}
+
+.enroll-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
+    min-width: 180px;
+}
+
+.enroll-field label {
+    font-size: 0.75rem;
+    color: #6b7280;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.enroll-field input[type="text"] {
+    background: #0f0f1a;
+    border: 1px solid #1e2d4a;
+    color: #e0e0e0;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-family: inherit;
+}
+
+.enroll-field input[type="file"] {
+    background: #0f0f1a;
+    border: 1px solid #1e2d4a;
+    color: #8892a4;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 0.8rem;
+}
+
+.enroll-field input[type="file"]::file-selector-button {
+    background: #0f3460;
+    border: none;
+    color: #00d4ff;
+    padding: 4px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.78rem;
+    margin-right: 8px;
+}
+
+.enroll-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.8rem;
+    color: #8892a4;
+    cursor: pointer;
+    white-space: nowrap;
+    padding-bottom: 8px;
+}
+
+.enroll-checkbox input {
+    accent-color: #00d4ff;
+}
+
+.btn-enroll {
+    background: #00d4ff;
+    color: #1a1a2e;
+    border: none;
+    padding: 8px 24px;
+    border-radius: 6px;
+    font-weight: 700;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+    height: 38px;
+}
+
+.btn-enroll:hover { opacity: 0.85; }
+.btn-enroll:disabled { opacity: 0.5; cursor: default; }
+
+.enroll-status {
+    font-size: 0.8rem;
+    padding: 4px 0;
+}
+
+.enroll-status.success { color: #00e676; }
+.enroll-status.error { color: #ff5252; }
+
+/* Faces header */
+.faces-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 14px;
+}
+
+.faces-header h3 {
+    font-size: 1rem;
+    color: #00d4ff;
+    font-weight: 600;
+}
+
+/* Faces grid */
+.faces-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 14px;
+}
+
+.face-card {
+    background: #16213e;
+    border-radius: 10px;
+    border: 1px solid #1e2d4a;
+    overflow: hidden;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.face-card:hover {
+    border-color: #0f3460;
+}
+
+.face-card-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+}
+
+.face-card-avatar {
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    overflow: hidden;
+    flex-shrink: 0;
+    background: #0d1117;
+}
+
+.face-card-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.face-card-noimg {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #4a5568;
+    font-size: 0.6rem;
+}
+
+.face-card-info {
+    flex: 1;
+}
+
+.face-card-name {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #e0e0e0;
+}
+
+.face-card-count {
+    font-size: 0.75rem;
+    color: #6b7280;
+}
+
+.btn-delete-person {
+    background: transparent;
+    border: 1px solid #1e2d4a;
+    color: #ff5252;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    font-size: 1.1rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+    flex-shrink: 0;
+}
+
+.btn-delete-person:hover {
+    background: #ff5252;
+    color: #fff;
+    border-color: #ff5252;
+}
+
+/* Expandable images section */
+.face-card-images {
+    display: none;
+    padding: 0 14px 14px;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.face-card.expanded .face-card-images {
+    display: flex;
+}
+
+.face-thumb {
+    position: relative;
+    width: 72px;
+    height: 72px;
+    border-radius: 6px;
+    overflow: hidden;
+    background: #0d1117;
+}
+
+.face-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    cursor: pointer;
+}
+
+.face-thumb-del {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 20px;
+    height: 20px;
+    background: rgba(255, 82, 82, 0.8);
+    border: none;
+    color: #fff;
+    border-radius: 50%;
+    font-size: 0.75rem;
+    cursor: pointer;
+    display: none;
+    align-items: center;
+    justify-content: center;
+}
+
+.face-thumb:hover .face-thumb-del {
+    display: flex;
+}
+
 /* ===== Scrollbar ===== */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }

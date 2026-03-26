@@ -379,6 +379,141 @@ function switchTab(tabName) {
         badge.textContent = "0";
         loadEventsPage();
     }
+    if (tabName === "faces") {
+        loadFaces();
+    }
+}
+
+// ===== Face Enrollment =====
+
+async function loadFaces() {
+    const grid = document.getElementById("faces-grid");
+    grid.innerHTML = '<div class="no-data">Loading...</div>';
+
+    try {
+        const resp = await fetch("/api/faces");
+        const data = await resp.json();
+
+        if (!data.people || data.people.length === 0) {
+            grid.innerHTML = '<div class="no-data">No enrolled faces. Use the form above to add someone.</div>';
+            return;
+        }
+
+        grid.innerHTML = data.people.map(p => {
+            const thumb = p.thumbnail || "";
+            const imgHtml = thumb
+                ? `<img src="${thumb}" alt="${p.name}" loading="lazy">`
+                : `<div class="face-card-noimg">No Photo</div>`;
+
+            const imagesHtml = p.images.map(img =>
+                `<div class="face-thumb">
+                    <img src="/images/faces/${img}" alt="${img}" onclick="openLightbox('/images/faces/${img}', '${p.name}', '${img}', '')">
+                    <button class="face-thumb-del" onclick="event.stopPropagation(); deletePersonImage('${p.name}', '${img}')" title="Delete image">&times;</button>
+                </div>`
+            ).join("");
+
+            return `<div class="face-card" onclick="toggleFaceCard(this)">
+                <div class="face-card-header">
+                    <div class="face-card-avatar">${imgHtml}</div>
+                    <div class="face-card-info">
+                        <div class="face-card-name">${p.name}</div>
+                        <div class="face-card-count">${p.image_count} photo${p.image_count !== 1 ? 's' : ''}</div>
+                    </div>
+                    <button class="btn-delete-person" onclick="event.stopPropagation(); deletePerson('${p.name}')" title="Delete person">&times;</button>
+                </div>
+                <div class="face-card-images">${imagesHtml}</div>
+            </div>`;
+        }).join("");
+    } catch (e) {
+        grid.innerHTML = '<div class="no-data">Failed to load faces</div>';
+        console.error("Failed to load faces:", e);
+    }
+}
+
+function toggleFaceCard(card) {
+    card.classList.toggle("expanded");
+}
+
+async function enrollFace(event) {
+    event.preventDefault();
+
+    const name = document.getElementById("enroll-name").value.trim();
+    const files = document.getElementById("enroll-files").files;
+    const status = document.getElementById("enroll-status");
+    const btn = document.getElementById("btn-enroll");
+
+    if (!name || files.length === 0) {
+        status.textContent = "Please provide a name and at least one photo.";
+        status.className = "enroll-status error";
+        return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = "Enrolling...";
+    status.textContent = "";
+
+    const cropFaces = document.getElementById("enroll-crop").checked;
+
+    const formData = new FormData();
+    formData.append("name", name);
+    formData.append("crop_faces", cropFaces);
+    for (const file of files) {
+        formData.append("files", file);
+    }
+
+    try {
+        const resp = await fetch("/api/faces/enroll", { method: "POST", body: formData });
+        const data = await resp.json();
+
+        if (resp.ok) {
+            status.textContent = `Enrolled ${data.added.length} photo(s) for "${data.name}" (${data.total_images} total)`;
+            status.className = "enroll-status success";
+            document.getElementById("enroll-form").reset();
+            loadFaces();
+        } else {
+            status.textContent = data.error || "Enrollment failed";
+            status.className = "enroll-status error";
+        }
+    } catch (e) {
+        status.textContent = "Network error during enrollment";
+        status.className = "enroll-status error";
+        console.error("Enroll error:", e);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = "Enroll";
+    }
+}
+
+async function deletePerson(name) {
+    if (!confirm(`Delete "${name}" and all their photos?`)) return;
+
+    try {
+        const resp = await fetch(`/api/faces/${encodeURIComponent(name)}`, { method: "DELETE" });
+        if (resp.ok) {
+            loadFaces();
+        } else {
+            const data = await resp.json();
+            alert(data.error || "Failed to delete");
+        }
+    } catch (e) {
+        console.error("Delete person error:", e);
+    }
+}
+
+async function deletePersonImage(name, filename) {
+    if (!confirm(`Delete this photo from "${name}"?`)) return;
+
+    try {
+        const resp = await fetch(`/api/faces/${encodeURIComponent(name)}/image/${encodeURIComponent(filename)}`, { method: "DELETE" });
+        if (resp.ok) {
+            loadFaces();
+        } else {
+            const data = await resp.json();
+            alert(data.error || "Failed to delete image");
+        }
+    } catch (e) {
+        console.error("Delete image error:", e);
+    }
 }
 
 // ===== Mode Switching =====
