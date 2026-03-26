@@ -427,6 +427,9 @@ function switchTab(tabName) {
         content.classList.toggle("active", content.id === "tab-" + tabName);
     });
 
+    if (tabName === "home") {
+        loadHomeDashboard();
+    }
     if (tabName === "events") {
         // Clear new events badge
         const badge = document.getElementById("events-badge");
@@ -450,17 +453,24 @@ let unreadCount = 0;
 function loadNotifPrefs() {
     const prefs = JSON.parse(localStorage.getItem("notifPrefs") || "{}");
     document.getElementById("notif-browser").checked = prefs.browser || false;
-    document.getElementById("notif-sound").checked = prefs.sound !== false; // default true
+    document.getElementById("notif-sound").checked = prefs.sound !== false;
+    document.getElementById("notif-toast").checked = prefs.toast !== false;
+    document.getElementById("notif-person").checked = prefs.person_detected !== false;
+    document.getElementById("notif-unknown-face").checked = prefs.unknown_face !== false;
+    document.getElementById("notif-known-face").checked = prefs.known_face !== false;
 }
 
 function saveNotifPrefs() {
     const prefs = {
         browser: document.getElementById("notif-browser").checked,
         sound: document.getElementById("notif-sound").checked,
+        toast: document.getElementById("notif-toast").checked,
+        person_detected: document.getElementById("notif-person").checked,
+        unknown_face: document.getElementById("notif-unknown-face").checked,
+        known_face: document.getElementById("notif-known-face").checked,
     };
     localStorage.setItem("notifPrefs", JSON.stringify(prefs));
 
-    // Request browser notification permission if enabled
     if (prefs.browser && Notification.permission === "default") {
         Notification.requestPermission();
     }
@@ -470,6 +480,12 @@ function handleAlert(data) {
     const prefs = JSON.parse(localStorage.getItem("notifPrefs") || "{}");
     const now = new Date().toLocaleTimeString();
 
+    // Check if this alert type is enabled by the user
+    const typeKey = data.type; // "person_detected", "unknown_face", "known_face"
+    if (prefs[typeKey] === false) {
+        return; // User disabled this alert type
+    }
+
     // Add to history
     notifHistory.unshift({ ...data, time: now });
     if (notifHistory.length > 50) notifHistory.pop();
@@ -478,7 +494,9 @@ function handleAlert(data) {
     renderNotifList();
 
     // Show toast
-    showToast(data.title, data.detail);
+    if (prefs.toast !== false) {
+        showToast(data.title, data.detail);
+    }
 
     // Play sound
     if (prefs.sound !== false) {
@@ -577,6 +595,57 @@ document.addEventListener("click", (e) => {
 // ===== Settings =====
 
 let originalSettings = {};
+
+// ===== Auth =====
+
+async function doLogout() {
+    try {
+        await fetch("/api/logout", { method: "POST" });
+    } catch (e) {}
+    window.location.href = "/login";
+}
+
+async function changePassword() {
+    const oldPw = document.getElementById("pw-old").value;
+    const newPw = document.getElementById("pw-new").value;
+    const confirmPw = document.getElementById("pw-confirm").value;
+    const statusEl = document.getElementById("pw-status");
+
+    if (!oldPw || !newPw) {
+        statusEl.textContent = "Please fill in all fields.";
+        statusEl.className = "settings-status error";
+        return;
+    }
+
+    if (newPw !== confirmPw) {
+        statusEl.textContent = "New passwords do not match.";
+        statusEl.className = "settings-status error";
+        return;
+    }
+
+    try {
+        const resp = await fetch("/api/change-password", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ old_password: oldPw, new_password: newPw })
+        });
+        const data = await resp.json();
+
+        if (resp.ok) {
+            statusEl.textContent = data.message || "Password changed!";
+            statusEl.className = "settings-status success";
+            document.getElementById("pw-old").value = "";
+            document.getElementById("pw-new").value = "";
+            document.getElementById("pw-confirm").value = "";
+        } else {
+            statusEl.textContent = data.error || "Failed to change password";
+            statusEl.className = "settings-status error";
+        }
+    } catch (e) {
+        statusEl.textContent = "Connection error";
+        statusEl.className = "settings-status error";
+    }
+}
 
 async function loadSettings() {
     const container = document.getElementById("settings-container");
@@ -732,6 +801,168 @@ async function saveSettings() {
         statusEl.textContent = "Failed to save settings.";
         statusEl.className = "settings-status error";
         console.error("Save settings error:", e);
+    }
+}
+
+// ===== Home Dashboard =====
+
+let hourlyChart = null;
+
+async function loadHomeDashboard() {
+    await Promise.all([
+        loadTodayStats(),
+        loadHourlyChart(),
+        loadTopObjects(),
+        loadHomeRecentEvents(),
+    ]);
+}
+
+async function loadTodayStats() {
+    try {
+        const resp = await fetch("/api/analytics/today");
+        const data = await resp.json();
+        document.getElementById("home-total-det").textContent = data.total_detections || 0;
+        document.getElementById("home-persons").textContent = data.persons || 0;
+        document.getElementById("home-known").textContent = data.known_faces || 0;
+        document.getElementById("home-unknown").textContent = data.unknown_faces || 0;
+    } catch (e) {
+        console.error("Failed to load today stats:", e);
+    }
+}
+
+async function loadHourlyChart() {
+    try {
+        const resp = await fetch("/api/analytics/hourly?hours=24");
+        const data = await resp.json();
+        const activity = data.activity || [];
+
+        const labels = activity.map(a => a.hour);
+        const detections = activity.map(a => a.detections);
+        const faces = activity.map(a => a.faces);
+
+        const ctx = document.getElementById("hourly-chart");
+        if (!ctx) return;
+
+        if (hourlyChart) {
+            hourlyChart.destroy();
+        }
+
+        hourlyChart = new Chart(ctx, {
+            type: "bar",
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: "Detections",
+                        data: detections,
+                        backgroundColor: "rgba(0, 230, 118, 0.6)",
+                        borderColor: "#00e676",
+                        borderWidth: 1,
+                        borderRadius: 3,
+                    },
+                    {
+                        label: "Faces",
+                        data: faces,
+                        backgroundColor: "rgba(0, 212, 255, 0.6)",
+                        borderColor: "#00d4ff",
+                        borderWidth: 1,
+                        borderRadius: 3,
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        labels: { color: "#8892a4", font: { size: 11 } }
+                    }
+                },
+                scales: {
+                    x: {
+                        ticks: { color: "#6b7280", font: { size: 10 }, maxRotation: 45 },
+                        grid: { color: "rgba(30, 45, 74, 0.5)" }
+                    },
+                    y: {
+                        beginAtZero: true,
+                        ticks: { color: "#6b7280", font: { size: 10 }, stepSize: 1 },
+                        grid: { color: "rgba(30, 45, 74, 0.5)" }
+                    }
+                }
+            }
+        });
+    } catch (e) {
+        console.error("Failed to load hourly chart:", e);
+    }
+}
+
+async function loadTopObjects() {
+    const container = document.getElementById("home-top-objects");
+    try {
+        const resp = await fetch("/api/analytics/top-objects?limit=8");
+        const data = await resp.json();
+        const objects = data.objects || [];
+
+        if (objects.length === 0) {
+            container.innerHTML = '<div class="no-data">No detections today</div>';
+            return;
+        }
+
+        const maxCount = objects[0].count;
+        container.innerHTML = objects.map(obj => {
+            const pct = maxCount > 0 ? (obj.count / maxCount * 100) : 0;
+            return `<div class="top-object-row">
+                <span class="top-object-label">${obj.label}</span>
+                <div class="top-object-bar-wrap">
+                    <div class="top-object-bar" style="width: ${pct}%"></div>
+                </div>
+                <span class="top-object-count">${obj.count}</span>
+            </div>`;
+        }).join("");
+    } catch (e) {
+        container.innerHTML = '<div class="no-data">Failed to load</div>';
+    }
+}
+
+async function loadHomeRecentEvents() {
+    const container = document.getElementById("home-recent-events");
+    try {
+        const resp = await fetch("/api/events?limit=8");
+        const data = await resp.json();
+        const events = data.events || [];
+
+        if (events.length === 0) {
+            container.innerHTML = '<div class="no-data">No events yet</div>';
+            return;
+        }
+
+        container.innerHTML = events.map(ev => {
+            const type = ev.event_type || "-";
+            const typeClass = type === "detection" ? "detection" : "face";
+            const time = ev.timestamp ? ev.timestamp.substring(11, 19) : "-";
+            const imgDir = type === "face" ? "events" : "roi";
+            const imgUrl = ev.image_path ? `/images/${imgDir}/${ev.image_path}` : null;
+
+            let detail = "";
+            if (type === "detection") {
+                detail = ev.object_type || "-";
+            } else {
+                detail = ev.person_name || "Unknown";
+            }
+
+            return `<div class="recent-event-row" ${imgUrl ? `onclick="openLightbox('${imgUrl}', '${detail}', '${type}', '${ev.timestamp || ""}')" style="cursor:pointer"` : ""}>
+                <div class="recent-event-thumb">
+                    ${imgUrl ? `<img src="${imgUrl}" alt="${detail}" loading="lazy">` : '<div class="no-thumb">-</div>'}
+                </div>
+                <div class="recent-event-info">
+                    <span class="recent-event-detail">${detail}</span>
+                    <span class="recent-event-time">${time}</span>
+                </div>
+                <span class="event-type ${typeClass}">${type}</span>
+            </div>`;
+        }).join("");
+    } catch (e) {
+        container.innerHTML = '<div class="no-data">Failed to load</div>';
     }
 }
 
@@ -919,6 +1150,15 @@ document.addEventListener("DOMContentLoaded", () => {
     loadEvents();
     pollStatus();
     loadNotifPrefs();
+    loadHomeDashboard();
+
+    // Auto-refresh home dashboard every 30 seconds
+    setInterval(() => {
+        const homeTab = document.getElementById("tab-home");
+        if (homeTab && homeTab.classList.contains("active")) {
+            loadHomeDashboard();
+        }
+    }, 30000);
 
     setInterval(loadEvents, 10000);
     setInterval(pollStatus, 5000);

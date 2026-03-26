@@ -55,6 +55,24 @@ header h1 {
 .status-dot.connected { background: #00e676; box-shadow: 0 0 8px #00e676; }
 .status-dot.disconnected { background: #ff5252; box-shadow: 0 0 8px #ff5252; }
 
+.btn-logout {
+    background: transparent;
+    border: 1px solid #1e2d4a;
+    color: #8892a4;
+    padding: 4px 12px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    margin-left: 4px;
+}
+
+.btn-logout:hover {
+    background: #ff5252;
+    color: #fff;
+    border-color: #ff5252;
+}
+
 /* ===== Layout ===== */
 .container {
     display: grid;
@@ -1412,6 +1430,33 @@ header h1 {
     accent-color: #00d4ff;
 }
 
+.notif-panel-types {
+    display: flex;
+    gap: 10px;
+    padding: 6px 14px 8px;
+    border-bottom: 1px solid #0f0f1a;
+    font-size: 0.72rem;
+    color: #8892a4;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.notif-panel-types label {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    cursor: pointer;
+}
+
+.notif-panel-types input {
+    accent-color: #00d4ff;
+}
+
+.notif-types-label {
+    font-weight: 600;
+    color: #6b7280;
+}
+
 .notif-list {
     list-style: none;
     max-height: 280px;
@@ -1498,6 +1543,188 @@ header h1 {
 @keyframes toast-fade-out {
     from { opacity: 1; }
     to { opacity: 0; transform: translateY(10px); }
+}
+
+/* ===== Home Dashboard ===== */
+.home-page {
+    padding: 16px;
+}
+
+/* Stat Cards Row */
+.stat-cards-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 14px;
+    margin-bottom: 16px;
+}
+
+.stat-card {
+    background: #16213e;
+    border: 1px solid #1e2d4a;
+    border-radius: 10px;
+    padding: 18px 16px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.stat-card-icon {
+    font-size: 2rem;
+    line-height: 1;
+    opacity: 0.9;
+}
+
+.stat-card-data {
+    display: flex;
+    flex-direction: column;
+}
+
+.stat-card-value {
+    font-size: 1.8rem;
+    font-weight: 700;
+    color: #e0e0e0;
+    line-height: 1.1;
+}
+
+.stat-card-label {
+    font-size: 0.72rem;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-top: 2px;
+}
+
+/* Home Grid */
+.home-grid {
+    display: grid;
+    grid-template-columns: 1fr 360px;
+    gap: 16px;
+}
+
+@media (max-width: 900px) {
+    .home-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.home-chart-card .card-body {
+    height: 250px;
+}
+
+.home-side {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+/* Top Objects */
+.top-objects-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.top-object-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.top-object-label {
+    font-size: 0.8rem;
+    color: #e0e0e0;
+    font-weight: 500;
+    min-width: 70px;
+}
+
+.top-object-bar-wrap {
+    flex: 1;
+    height: 8px;
+    background: #0f0f1a;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.top-object-bar {
+    height: 100%;
+    background: linear-gradient(90deg, #00e676, #00d4ff);
+    border-radius: 4px;
+    transition: width 0.3s ease;
+}
+
+.top-object-count {
+    font-size: 0.8rem;
+    color: #00e676;
+    font-weight: 700;
+    min-width: 30px;
+    text-align: right;
+}
+
+/* Recent Events on Home */
+.recent-events-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.recent-event-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: #0f0f1a;
+    transition: background 0.2s;
+}
+
+.recent-event-row:hover {
+    background: #1a1f35;
+}
+
+.recent-event-thumb {
+    width: 40px;
+    height: 40px;
+    border-radius: 6px;
+    overflow: hidden;
+    background: #16213e;
+    flex-shrink: 0;
+}
+
+.recent-event-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.no-thumb {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #4a5568;
+    font-size: 0.7rem;
+}
+
+.recent-event-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+}
+
+.recent-event-detail {
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: #e0e0e0;
+}
+
+.recent-event-time {
+    font-size: 0.68rem;
+    color: #4a5568;
 }
 
 /* ===== Scrollbar ===== */

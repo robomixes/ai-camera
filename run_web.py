@@ -1,8 +1,12 @@
 """Standalone entry point for the AI Camera web dashboard."""
+import logging
 import sys
 import uvicorn
 from web.server import create_app
 import config
+
+# Suppress noisy SSE disconnect errors
+logging.getLogger("sse_starlette").setLevel(logging.ERROR)
 
 app = create_app()
 

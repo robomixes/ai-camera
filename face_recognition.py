@@ -420,8 +420,8 @@ def run_facenet_recognition(frame, picam2_frame_size):
     
     for t_id, t_face in TRACKED_FACES.items():
         
-        # Only perform recognition if we have enough frames for a stable average
-        if len(t_face.embedding_history) >= 2: 
+        # Perform recognition as soon as we have any embedding (was 2, now 1 for faster detection)
+        if len(t_face.embedding_history) >= 1:
             
             aggregated_embedding = t_face.get_aggregated_embedding()
             name, distance = recognize_face(aggregated_embedding)

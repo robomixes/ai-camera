@@ -14,7 +14,8 @@
             <span id="camera-info" class="header-info">-</span>
         </div>
         <nav class="tab-nav">
-            <button class="tab-btn active" data-tab="live">Live</button>
+            <button class="tab-btn active" data-tab="home">Home</button>
+            <button class="tab-btn" data-tab="live">Live</button>
             <button class="tab-btn" data-tab="events">Events <span id="events-badge" class="tab-badge">0</span></button>
             <button class="tab-btn" data-tab="faces">Faces</button>
             <button class="tab-btn" data-tab="settings">Settings</button>
@@ -32,8 +33,15 @@
                         <button class="notif-clear" onclick="clearNotifHistory()">Clear</button>
                     </div>
                     <div class="notif-panel-settings">
-                        <label><input type="checkbox" id="notif-browser" onchange="saveNotifPrefs()"> Browser notifications</label>
+                        <label><input type="checkbox" id="notif-browser" onchange="saveNotifPrefs()"> Browser</label>
                         <label><input type="checkbox" id="notif-sound" onchange="saveNotifPrefs()" checked> Sound</label>
+                        <label><input type="checkbox" id="notif-toast" onchange="saveNotifPrefs()" checked> Toast</label>
+                    </div>
+                    <div class="notif-panel-types">
+                        <span class="notif-types-label">Alert types:</span>
+                        <label><input type="checkbox" id="notif-person" onchange="saveNotifPrefs()" checked> Person</label>
+                        <label><input type="checkbox" id="notif-unknown-face" onchange="saveNotifPrefs()" checked> Unknown face</label>
+                        <label><input type="checkbox" id="notif-known-face" onchange="saveNotifPrefs()" checked> Known face</label>
                     </div>
                     <ul id="notif-list" class="notif-list">
                         <li class="no-data">No alerts yet</li>
@@ -42,11 +50,83 @@
             </div>
             <span id="status-dot" class="status-dot disconnected"></span>
             <span id="status-text">Connecting...</span>
+            <button class="btn-logout" onclick="doLogout()" title="Sign out">Logout</button>
         </div>
     </header>
 
+    <!-- ===== HOME TAB ===== -->
+    <div id="tab-home" class="tab-content active">
+        <div class="home-page">
+            <!-- Stat Cards Row -->
+            <div class="stat-cards-row">
+                <div class="stat-card">
+                    <div class="stat-card-icon" style="color: #00e676;">&#9678;</div>
+                    <div class="stat-card-data">
+                        <div class="stat-card-value" id="home-total-det">0</div>
+                        <div class="stat-card-label">Detections Today</div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-card-icon" style="color: #ffa726;">&#9823;</div>
+                    <div class="stat-card-data">
+                        <div class="stat-card-value" id="home-persons">0</div>
+                        <div class="stat-card-label">Persons</div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-card-icon" style="color: #00d4ff;">&#9786;</div>
+                    <div class="stat-card-data">
+                        <div class="stat-card-value" id="home-known">0</div>
+                        <div class="stat-card-label">Known Faces</div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-card-icon" style="color: #ff5252;">&#9888;</div>
+                    <div class="stat-card-data">
+                        <div class="stat-card-value" id="home-unknown">0</div>
+                        <div class="stat-card-label">Unknown Faces</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Charts Row -->
+            <div class="home-grid">
+                <!-- Hourly Activity Chart -->
+                <div class="card home-chart-card">
+                    <div class="card-header">Activity (Last 24h)</div>
+                    <div class="card-body">
+                        <canvas id="hourly-chart" height="200"></canvas>
+                    </div>
+                </div>
+
+                <!-- Right Column -->
+                <div class="home-side">
+                    <!-- Top Objects -->
+                    <div class="card">
+                        <div class="card-header">Top Detected Objects</div>
+                        <div class="card-body">
+                            <div id="home-top-objects" class="top-objects-list">
+                                <div class="no-data">Loading...</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Recent Alerts -->
+                    <div class="card">
+                        <div class="card-header">Recent Events</div>
+                        <div class="card-body">
+                            <div id="home-recent-events" class="recent-events-list">
+                                <div class="no-data">Loading...</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- ===== LIVE TAB ===== -->
-    <div id="tab-live" class="tab-content active">
+    <div id="tab-live" class="tab-content">
         <div class="container">
             <!-- Video Panel -->
             <div class="video-section">
@@ -251,6 +331,43 @@
                 <button class="btn-save-settings" onclick="saveSettings()">Save Changes</button>
                 <span id="settings-status" class="settings-status"></span>
             </div>
+
+            <!-- Change Password -->
+            <div class="card settings-card" style="margin-top: 20px;">
+                <div class="card-header">Change Password</div>
+                <div class="card-body">
+                    <div class="password-form">
+                        <div class="setting-row">
+                            <div class="setting-label">
+                                <span class="setting-key">Current Password</span>
+                            </div>
+                            <div class="setting-value">
+                                <input type="password" id="pw-old" class="setting-input" autocomplete="current-password">
+                            </div>
+                        </div>
+                        <div class="setting-row">
+                            <div class="setting-label">
+                                <span class="setting-key">New Password</span>
+                            </div>
+                            <div class="setting-value">
+                                <input type="password" id="pw-new" class="setting-input" autocomplete="new-password">
+                            </div>
+                        </div>
+                        <div class="setting-row">
+                            <div class="setting-label">
+                                <span class="setting-key">Confirm Password</span>
+                            </div>
+                            <div class="setting-value">
+                                <input type="password" id="pw-confirm" class="setting-input" autocomplete="new-password">
+                            </div>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 12px; margin-top: 12px;">
+                            <button class="btn-save-settings" onclick="changePassword()">Change Password</button>
+                            <span id="pw-status" class="settings-status"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -269,6 +386,7 @@
     <!-- Alert Sound (short beep as base64) -->
     <audio id="alert-sound" preload="auto" src="data:audio/wav;base64,UklGRl4FAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YToFAAAAAAEAAgADAAQABQAHAAgACgAMAA4AEAASABUAGAAbAB4AIQAlACkALQAxADYAOwBAAEUASwBRAFcAXgBlAGwAdAB8AIQAjACVAJ4ApwCxALsAxQDPANoA5QDwAPwBCAEUASEBLgE7AUkBVwFlAXQBgwGSAaIBsgHCANIA4wD0AQUBFgEnATkBSwFdAW8BggGUAacBugHNAeEB9AIIAhwCMAJEAlkCbgKDApgCrgLEAtoC8AMGAxwDMwNKA2EDegOSA6sDxAPdA/cDEAMqA0QDXQN3A5IDrQPIA+MD/gQZBDUEUARsBIkEpQTCBN8E/AQaBDgEVgR0BJIE0ATPBO4FDAU7BWoFmQXJBfkGKQZaBowGvgbwByMHVgeJB70H8QgmCFsIkQjHCP0JMwlqCaEJ2QoRCkkKggq7CvQLLgtpC6QL3wwbDFcMlAzRDQ4NTA2KDckOCA5IDogOyQ8KD0wPjg/QEBMQVhCZENwRIBFkEakR7hIzEnkSvxMGE00TlBPcFCQUbBS1FP4VSRWSE9wUJhRwFLsVBhVRFZ0V6RY1FoIWzxcdF2sXuRgIGFcYpxj3GUcZmBnpGjsajRrfGzIbhRvYHCwcgBzUHSkdfR3SHice/B9SH6gf/iBVIKwgAyFaIbIiCiJiIrsi"></audio>
 
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
     <script src="/static/js/app.js"></script>
 </body>
 </html>

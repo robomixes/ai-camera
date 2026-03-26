@@ -368,6 +368,7 @@ venv/
 
 # Runtime data (images, videos, database, settings overrides)
 config_overrides.json
+auth.json
 event_images/
 roi_events/
 output_images/

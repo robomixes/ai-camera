@@ -8,8 +8,9 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
-from fastapi.responses import StreamingResponse, JSONResponse, HTMLResponse
+from fastapi.responses import StreamingResponse, JSONResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 from sse_starlette.sse import EventSourceResponse
 
 import config
@@ -18,6 +19,7 @@ import face_recognition as face_rec
 from camera import create_camera
 from camera.base import CameraBase
 from web.ai_runner import AIRunner
+from web.auth import initialize_auth, verify_login, change_password, create_session, get_session_user, delete_session
 from web.utils import encode_jpeg, resize_frame
 
 _faces_lock = threading.Lock()
@@ -34,6 +36,7 @@ async def lifespan(app: FastAPI):
     global _cam, _ai_runner
 
     # Startup
+    initialize_auth()
     db_handler.initialize_db()
 
     _cam = create_camera(
@@ -70,6 +73,76 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     app = FastAPI(title="AI Camera", lifespan=lifespan)
 
+    # --- Auth Middleware ---
+    PUBLIC_PATHS = {"/login", "/api/login", "/static/css/style.css", "/static/js/app.js"}
+
+    class AuthMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            path = request.url.path
+
+            # Allow public paths
+            if path in PUBLIC_PATHS or path.startswith("/static/"):
+                return await call_next(request)
+
+            # Check session cookie
+            token = request.cookies.get("session")
+            if token and get_session_user(token):
+                return await call_next(request)
+
+            # API requests get 401
+            if path.startswith("/api/") or path.startswith("/stream"):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+            # HTML requests redirect to login
+            return RedirectResponse("/login")
+
+    app.add_middleware(AuthMiddleware)
+
+    # --- Login/Logout ---
+    LOGIN_PAGE = STATIC_DIR / "login.html"
+
+    @app.get("/login")
+    async def login_page():
+        return HTMLResponse(LOGIN_PAGE.read_text())
+
+    @app.post("/api/login")
+    async def api_login(request: Request):
+        body = await request.json()
+        username = body.get("username", "")
+        password = body.get("password", "")
+
+        if verify_login(username, password):
+            token = create_session(username)
+            response = JSONResponse({"success": True, "username": username})
+            response.set_cookie("session", token, httponly=True, samesite="lax", max_age=86400)
+            return response
+        return JSONResponse({"error": "Invalid username or password"}, status_code=401)
+
+    @app.post("/api/logout")
+    async def api_logout(request: Request):
+        token = request.cookies.get("session")
+        if token:
+            delete_session(token)
+        response = JSONResponse({"success": True})
+        response.delete_cookie("session")
+        return response
+
+    @app.post("/api/change-password")
+    async def api_change_password(request: Request):
+        token = request.cookies.get("session")
+        username = get_session_user(token) if token else None
+        if not username:
+            return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+        body = await request.json()
+        old_pw = body.get("old_password", "")
+        new_pw = body.get("new_password", "")
+
+        success, message = change_password(username, old_pw, new_pw)
+        if success:
+            return {"message": message}
+        return JSONResponse({"error": message}, status_code=400)
+
     # --- MJPEG Stream ---
     @app.get("/stream")
     async def mjpeg_stream():
@@ -104,80 +177,36 @@ def create_app() -> FastAPI:
 
     async def _detection_generator(request: Request):
         prev_detections = None
-        last_alert_time = 0
-        alert_cooldown = 5.0  # seconds between alerts to avoid spam
 
-        while True:
-            if await request.is_disconnected():
-                break
-            if _ai_runner:
-                _, detections = _ai_runner.get_latest()
-                det_str = json.dumps(detections)
-                if det_str != prev_detections:
-                    prev_detections = det_str
-                    yield {
-                        "event": "detections",
-                        "data": json.dumps({
-                            "detections": detections,
-                            "fps": round(_ai_runner.fps, 1),
-                            "mode": _ai_runner.mode,
-                        })
-                    }
-
-                    # Check for alerts
-                    now = time.time()
-                    if getattr(config, "ALERT_ENABLED", False) and detections and (now - last_alert_time >= alert_cooldown):
-                        alerts = _check_alerts(detections, _ai_runner.mode)
-                        if alerts:
-                            last_alert_time = now
-                            for alert in alerts:
-                                yield {
-                                    "event": "alert",
-                                    "data": json.dumps(alert)
-                                }
-
-            await asyncio.sleep(0.3)
-
-    def _check_alerts(detections: list, mode: str) -> list:
-        """Check detections against configured alert rules."""
-        alert_events = getattr(config, "ALERT_EVENTS", [])
-        alerts = []
-
-        for det in detections:
-            # Person detected (YOLO)
-            if "person_detected" in alert_events:
-                label = det.get("label", "")
-                if label == "person":
-                    alerts.append({
-                        "type": "person_detected",
-                        "title": "Person Detected",
-                        "detail": f"person ({det.get('confidence', 0):.0%} confidence)",
-                    })
-                    break  # one alert per type per cycle
-
-            # Unknown face
-            if "unknown_face" in alert_events:
-                name = det.get("name", "")
-                if name == "Unknown":
-                    alerts.append({
-                        "type": "unknown_face",
-                        "title": "Unknown Face",
-                        "detail": "Unrecognized face detected",
-                    })
+        try:
+            while True:
+                if await request.is_disconnected():
                     break
+                if _ai_runner:
+                    _, detections = _ai_runner.get_latest()
+                    det_str = json.dumps(detections)
+                    if det_str != prev_detections:
+                        prev_detections = det_str
+                        yield {
+                            "event": "detections",
+                            "data": json.dumps({
+                                "detections": detections,
+                                "fps": round(_ai_runner.fps, 1),
+                                "mode": _ai_runner.mode,
+                            })
+                        }
 
-            # Known face
-            if "known_face" in alert_events:
-                name = det.get("name", "")
-                if name and name not in ("Unknown", "No Database", ""):
-                    alerts.append({
-                        "type": "known_face",
-                        "title": f"{name} Detected",
-                        "detail": f"Known person: {name}",
-                    })
-                    break
+                    # Emit alerts from the AI runner's smart logging
+                    alerts = _ai_runner.get_pending_alerts()
+                    for alert in alerts:
+                        yield {
+                            "event": "alert",
+                            "data": json.dumps(alert)
+                        }
 
-        return alerts
+                await asyncio.sleep(0.3)
+        except (asyncio.CancelledError, Exception):
+            pass
 
     # --- REST API ---
     @app.get("/api/status")
@@ -230,6 +259,18 @@ def create_app() -> FastAPI:
         deleted = db_handler.delete_all_events(event_type=event_type, date_from=date_from, date_to=date_to)
         return {"deleted": deleted}
 
+    @app.get("/api/analytics/today")
+    async def analytics_today():
+        return db_handler.get_today_stats()
+
+    @app.get("/api/analytics/hourly")
+    async def analytics_hourly(hours: int = 24):
+        return {"activity": db_handler.get_hourly_activity(hours=hours)}
+
+    @app.get("/api/analytics/top-objects")
+    async def analytics_top_objects(limit: int = 10):
+        return {"objects": db_handler.get_top_objects(limit=limit)}
+
     @app.post("/api/ai/mode")
     async def set_ai_mode(request: Request):
         body = await request.json()
@@ -245,10 +286,15 @@ def create_app() -> FastAPI:
 
     # --- Settings API ---
     SETTINGS_SCHEMA = {
+        "CAMERA_ID": {"type": "string", "description": "Camera identifier for event logs", "category": "Camera"},
+        "CAMERA_DESCRIPTION": {"type": "string", "description": "Camera location/description", "category": "Camera"},
+        "GPS_LATITUDE": {"type": "float", "min": -90, "max": 90, "description": "Camera GPS latitude", "category": "Camera"},
+        "GPS_LONGITUDE": {"type": "float", "min": -180, "max": 180, "description": "Camera GPS longitude", "category": "Camera"},
         "LOG_DELAY_SECONDS": {"type": "float", "min": 0.5, "max": 60, "description": "Seconds between event logs", "category": "Detection"},
         "DETECTION_CLASSES": {"type": "list", "description": "Object classes to detect (comma-separated)", "category": "Detection"},
         "RECOGNITION_THRESHOLD": {"type": "float", "min": 0.1, "max": 2.0, "description": "Distance below which a face is 'known'", "category": "Face Recognition"},
         "REJECTION_DISTANCE": {"type": "float", "min": 0.5, "max": 3.0, "description": "Distance above which detection is rejected", "category": "Face Recognition"},
+        "DETECTION_COOLDOWN_SECONDS": {"type": "float", "min": 5, "max": 600, "description": "Seconds before re-logging same detection", "category": "Detection"},
         "STREAM_JPEG_QUALITY": {"type": "int", "min": 10, "max": 100, "description": "JPEG quality for web stream", "category": "Stream"},
         "STREAM_MAX_WIDTH": {"type": "int", "min": 320, "max": 1920, "description": "Max width of streamed frames", "category": "Stream"},
         "STREAM_TARGET_FPS": {"type": "int", "min": 1, "max": 30, "description": "Target FPS for web stream", "category": "Stream"},
@@ -257,8 +303,6 @@ def create_app() -> FastAPI:
     }
 
     READONLY_SETTINGS = {
-        "CAMERA_ID": {"type": "string", "description": "Camera identifier", "category": "Camera"},
-        "CAMERA_DESCRIPTION": {"type": "string", "description": "Camera description", "category": "Camera"},
         "CAMERA_TYPE": {"type": "string", "description": "Camera backend type", "category": "Camera"},
         "RTSP_URL": {"type": "string", "description": "RTSP stream URL", "category": "Camera"},
         "FRAME_WIDTH": {"type": "int", "description": "Camera frame width", "category": "Camera"},
@@ -306,6 +350,8 @@ def create_app() -> FastAPI:
                         value = value.lower() in ("true", "1", "yes")
                     else:
                         value = bool(value)
+                elif schema["type"] == "string":
+                    value = str(value).strip()
                 elif schema["type"] == "list":
                     if isinstance(value, str):
                         value = [v.strip() for v in value.split(",") if v.strip()]

@@ -268,6 +268,97 @@ def delete_events(ids: list) -> int:
     return deleted
 
 
+def get_today_stats() -> dict:
+    """Get detection counts for today."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    stats = {"total_detections": 0, "total_faces": 0, "persons": 0, "known_faces": 0, "unknown_faces": 0}
+    try:
+        conn = sqlite3.connect(config.DB_NAME)
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT COUNT(*) FROM detections WHERE timestamp >= ?", (f"{today} 00:00:00",))
+        stats["total_detections"] = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM detections WHERE timestamp >= ? AND object_type = 'person'",
+                       (f"{today} 00:00:00",))
+        stats["persons"] = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM face_events WHERE timestamp >= ?", (f"{today} 00:00:00",))
+        stats["total_faces"] = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM face_events WHERE timestamp >= ? AND is_known = 1",
+                       (f"{today} 00:00:00",))
+        stats["known_faces"] = cursor.fetchone()[0]
+
+        stats["unknown_faces"] = stats["total_faces"] - stats["known_faces"]
+
+        conn.close()
+    except Exception as e:
+        print(f"Error getting today stats: {e}")
+    return stats
+
+
+def get_hourly_activity(hours: int = 24) -> list:
+    """Get detection counts per hour for the last N hours."""
+    from datetime import datetime, timedelta
+    activity = []
+    try:
+        conn = sqlite3.connect(config.DB_NAME)
+        cursor = conn.cursor()
+
+        now = datetime.now()
+        for i in range(hours - 1, -1, -1):
+            hour_start = (now - timedelta(hours=i)).replace(minute=0, second=0, microsecond=0)
+            hour_end = hour_start + timedelta(hours=1)
+            start_str = hour_start.strftime("%Y-%m-%d %H:%M:%S")
+            end_str = hour_end.strftime("%Y-%m-%d %H:%M:%S")
+
+            cursor.execute("SELECT COUNT(*) FROM detections WHERE timestamp >= ? AND timestamp < ?",
+                           (start_str, end_str))
+            det_count = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM face_events WHERE timestamp >= ? AND timestamp < ?",
+                           (start_str, end_str))
+            face_count = cursor.fetchone()[0]
+
+            activity.append({
+                "hour": hour_start.strftime("%H:%M"),
+                "detections": det_count,
+                "faces": face_count,
+            })
+
+        conn.close()
+    except Exception as e:
+        print(f"Error getting hourly activity: {e}")
+    return activity
+
+
+def get_top_objects(limit: int = 10) -> list:
+    """Get most frequently detected object classes today."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    objects = []
+    try:
+        conn = sqlite3.connect(config.DB_NAME)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "SELECT object_type, COUNT(*) as cnt FROM detections "
+            "WHERE timestamp >= ? GROUP BY object_type ORDER BY cnt DESC LIMIT ?",
+            (f"{today} 00:00:00", limit)
+        )
+        for row in cursor.fetchall():
+            objects.append({"label": row[0], "count": row[1]})
+
+        conn.close()
+    except Exception as e:
+        print(f"Error getting top objects: {e}")
+    return objects
+
+
+# need datetime import at module level
+from datetime import datetime
+
+
 # Run initialization if script is executed directly
 if __name__ == "__main__":
     initialize_db()

@@ -94,9 +94,12 @@ STREAM_JPEG_QUALITY = 70
 STREAM_MAX_WIDTH = 960
 STREAM_TARGET_FPS = 10
 
+# --- Smart Logging ---
+DETECTION_COOLDOWN_SECONDS = 60.0  # Don't re-log the same detection for this many seconds
+
 # --- Alerts ---
 ALERT_ENABLED = True
-ALERT_EVENTS = ["unknown_face", "person_detected"]  # available: unknown_face, person_detected, known_face
+ALERT_EVENTS = ["unknown_face", "person_detected", "known_face"]
 
 # --- Load any persisted runtime overrides (must be last) ---
 _load_overrides()
