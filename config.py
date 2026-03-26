@@ -41,10 +41,24 @@ EMBEDDING_HISTORY_SIZE = 5     # Number of past embeddings to average for stabil
 MIN_IOU_THRESHOLD = 0.5         # Minimum IoU overlap required to consider a detection as a continuation of a tracked face
 
 # --- NEW: Display Configuration ---
-ENABLE_GUI_DISPLAY = False   # Set to False to run headless (no windows shown)
+ENABLE_GUI_DISPLAY = True    # Set to False to run headless (no windows shown)
 
 # config.py (Additions)
 
 # --- Menu Settings ---
 MENU_TIMEOUT_SECONDS = 25  # Number of seconds to wait before auto-selecting
-MENU_DEFAULT_CHOICE = '7'  # The default option to pick on timeout (e.g., '1' for Camera Feed)
+MENU_DEFAULT_CHOICE = '5'  # The default option to pick on timeout (e.g., '5' for AI Analysis)
+
+# --- Camera Backend ---
+CAMERA_TYPE = "rtsp"       # "auto", "picamera", or "rtsp"
+RTSP_URL = "rtsp://admin:AnAs1001kad!@192.168.1.2/h264Preview_01_sub"  # sub-stream for lower latency
+RTSP_TRANSPORT = "tcp"     # "tcp" or "udp"
+FRAME_WIDTH = 1280
+FRAME_HEIGHT = 720
+
+# --- Web Server ---
+WEB_HOST = "0.0.0.0"
+WEB_PORT = 8080
+STREAM_JPEG_QUALITY = 70
+STREAM_MAX_WIDTH = 960
+STREAM_TARGET_FPS = 10

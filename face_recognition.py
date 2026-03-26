@@ -7,7 +7,13 @@ import os
 import sys
 import datetime
 import time # Import 'time' for time.time() calls
-from tensorflow.lite.python.interpreter import Interpreter 
+try:
+    from tensorflow.lite.python.interpreter import Interpreter
+except ImportError:
+    try:
+        from tflite_runtime.interpreter import Interpreter
+    except ImportError:
+        Interpreter = None
 import config 
 import db_handler 
 
@@ -312,14 +318,21 @@ def process_deferred_logs():
         if current_time - entry['last_log_time'] >= config.LOG_DELAY_SECONDS:
             
             # Check 2: Do we have a valid best frame captured during this window?
-            if entry['best_frame'] is not None:
-                
+            if entry['best_frame'] is not None and entry['best_frame'].any():
+
+                # Skip black/empty frames
+                if entry['best_frame'].mean() < 1.0:
+                    entry['best_frame'] = None
+                    entry['best_quality'] = float('inf')
+                    entry['last_log_time'] = current_time
+                    continue
+
                 # --- LOG AND SAVE THE BEST EVENT (Throttle Trigger) ---
-                
+
                 timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 image_filename = f"faces_best_{name}_{timestamp_str}.jpg"
                 full_image_path = os.path.join(config.EVENT_IMAGE_DIR, image_filename)
-                
+
                 # Save the best frame found
                 cv2.imwrite(full_image_path, entry['best_frame'])
                 
@@ -363,8 +376,26 @@ def run_facenet_recognition(frame, picam2_frame_size):
     current_embeddings = []
     
     if FACE_DETECTOR and not FACE_DETECTOR.empty():
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        raw_face_boxes = FACE_DETECTOR.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60))
+        # Scale down for faster/better Haar Cascade detection on high-res frames
+        h_img, w_img = frame.shape[:2]
+        max_detect_width = 800
+        if w_img > max_detect_width:
+            scale = max_detect_width / w_img
+            small = cv2.resize(frame, (max_detect_width, int(h_img * scale)))
+        else:
+            scale = 1.0
+            small = frame
+
+        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+        small_boxes = FACE_DETECTOR.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+
+        # Scale boxes back to original resolution
+        raw_face_boxes = []
+        for (x, y, w, h) in small_boxes:
+            raw_face_boxes.append((
+                int(x / scale), int(y / scale),
+                int(w / scale), int(h / scale)
+            ))
 
         for (x, y, w, h) in raw_face_boxes:
             face_image = frame[y:y+h, x:x+w]
@@ -424,37 +455,33 @@ def run_facenet_recognition(frame, picam2_frame_size):
         # ------------------------------------------------------------------
         # --- LOGGING BUFFER FILLING (Only if KNOWN) ---
         # ------------------------------------------------------------------
-        if is_known_person:
-            person_name = display_name
-            current_quality = distance # Lower distance (closer match) = Higher Quality
-            
-            if person_name not in LOGGING_BUFFER:
-                # Initialize the buffer entry for a new person
-                LOGGING_BUFFER[person_name] = {
-                    'last_log_time': time.time() - config.LOG_DELAY_SECONDS, # Allow immediate log on first appearance
-                    'best_frame': None, 
-                    'best_quality': float('inf'),
-                    'distance': distance
-                } 
-                
-            buffer_entry = LOGGING_BUFFER[person_name]
-            
-            # Check if current frame is the BEST one seen in the current (or new) window
-            if current_quality < buffer_entry['best_quality']:
-                
-                # Store the best available data
-                buffer_entry['best_quality'] = current_quality
-                buffer_entry['distance'] = distance
-                # Save a copy of the annotated frame as the evidence
-                buffer_entry['best_frame'] = annotated_frame.copy() 
-        
         # --- DRAWING ---
         cv2.rectangle(annotated_frame, (x, y), (x + w, y + h), color, 2)
-        
+
         # Display the Track ID and the recognition result
         label = f"T{t_id}: {display_name} ({distance:.2f})"
-        cv2.putText(annotated_frame, label, (x, y - 10), 
+        cv2.putText(annotated_frame, label, (x, y - 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+
+        # --- LOGGING BUFFER FILLING (Only if KNOWN, saved AFTER drawing) ---
+        if is_known_person:
+            person_name = display_name
+            current_quality = distance
+
+            if person_name not in LOGGING_BUFFER:
+                LOGGING_BUFFER[person_name] = {
+                    'last_log_time': time.time() - config.LOG_DELAY_SECONDS,
+                    'best_frame': None,
+                    'best_quality': float('inf'),
+                    'distance': distance
+                }
+
+            buffer_entry = LOGGING_BUFFER[person_name]
+
+            if current_quality < buffer_entry['best_quality']:
+                buffer_entry['best_quality'] = current_quality
+                buffer_entry['distance'] = distance
+                buffer_entry['best_frame'] = annotated_frame.copy()
 
         detected_faces.append((display_name, 1.0 - distance))
 

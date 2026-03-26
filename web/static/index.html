@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Camera Dashboard</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <!-- Header -->
+    <header>
+        <div class="header-left">
+            <h1>AI Camera</h1>
+            <span id="camera-info" class="header-info">-</span>
+        </div>
+        <nav class="tab-nav">
+            <button class="tab-btn active" data-tab="live">Live</button>
+            <button class="tab-btn" data-tab="events">Events <span id="events-badge" class="tab-badge">0</span></button>
+        </nav>
+        <div class="header-right">
+            <span id="status-dot" class="status-dot disconnected"></span>
+            <span id="status-text">Connecting...</span>
+        </div>
+    </header>
+
+    <!-- ===== LIVE TAB ===== -->
+    <div id="tab-live" class="tab-content active">
+        <div class="container">
+            <!-- Video Panel -->
+            <div class="video-section">
+                <div class="video-panel">
+                    <img id="stream-img" src="/stream" alt="Live Stream">
+                    <div class="video-overlay top-left">
+                        <span id="fps-badge" class="badge badge-fps">0 FPS</span>
+                    </div>
+                    <div class="video-overlay top-right">
+                        <span id="mode-indicator" class="mode-indicator mode-yolo">YOLO DETECTION</span>
+                    </div>
+                </div>
+
+                <!-- Mode Switch Bar -->
+                <div class="mode-bar">
+                    <div class="mode-bar-label">AI Mode</div>
+                    <div class="mode-buttons">
+                        <button id="btn-yolo" class="mode-btn mode-btn-yolo active" onclick="setMode('yolo')">
+                            <span class="mode-btn-icon">&#9678;</span>
+                            <span class="mode-btn-text">
+                                <strong>Object Detection</strong>
+                                <small>YOLOv8 - persons, vehicles, objects</small>
+                            </span>
+                        </button>
+                        <button id="btn-facenet" class="mode-btn mode-btn-face" onclick="setMode('facenet')">
+                            <span class="mode-btn-icon">&#9786;</span>
+                            <span class="mode-btn-text">
+                                <strong>Face Recognition</strong>
+                                <small>FaceNet - identify known faces</small>
+                            </span>
+                        </button>
+                        <button id="btn-both" class="mode-btn mode-btn-both" onclick="setMode('both')">
+                            <span class="mode-btn-icon">&#9881;</span>
+                            <span class="mode-btn-text">
+                                <strong>Both</strong>
+                                <small>YOLO + FaceNet combined</small>
+                            </span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sidebar -->
+            <div class="sidebar">
+                <div class="card">
+                    <div class="card-header">
+                        <span id="det-card-title">Object Detections</span>
+                        <span id="det-count" class="det-count">0</span>
+                    </div>
+                    <div class="card-body">
+                        <ul id="detection-list" class="detection-list">
+                            <li class="no-data">Waiting for stream...</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">Stream Info</div>
+                    <div class="card-body stats-grid">
+                        <div class="stat">
+                            <div class="stat-value" id="stat-fps">0</div>
+                            <div class="stat-label">FPS</div>
+                        </div>
+                        <div class="stat">
+                            <div class="stat-value" id="stat-mode">YOLO</div>
+                            <div class="stat-label">Mode</div>
+                        </div>
+                        <div class="stat">
+                            <div class="stat-value" id="stat-resolution">-</div>
+                            <div class="stat-label">Resolution</div>
+                        </div>
+                        <div class="stat">
+                            <div class="stat-value" id="stat-camera">-</div>
+                            <div class="stat-label">Source</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Recent Events (compact) -->
+                <div class="card">
+                    <div class="card-header">
+                        <span>Recent Events</span>
+                        <button class="btn-refresh" onclick="loadEvents()">Refresh</button>
+                    </div>
+                    <div class="card-body">
+                        <table class="event-table">
+                            <thead>
+                                <tr>
+                                    <th>Time</th>
+                                    <th>Type</th>
+                                    <th>Detail</th>
+                                </tr>
+                            </thead>
+                            <tbody id="event-tbody">
+                                <tr><td colspan="3" class="no-data">Loading...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== EVENTS TAB ===== -->
+    <div id="tab-events" class="tab-content">
+        <div class="events-page">
+            <!-- Filters -->
+            <div class="events-toolbar">
+                <div class="filter-group">
+                    <label>Type:</label>
+                    <button class="filter-btn active" data-filter="all">All</button>
+                    <button class="filter-btn" data-filter="detection">Detections</button>
+                    <button class="filter-btn" data-filter="face">Faces</button>
+                </div>
+                <div class="filter-group date-filter">
+                    <label>From:</label>
+                    <input type="date" id="filter-date-from" class="date-input" onchange="applyDateFilter()">
+                    <label>To:</label>
+                    <input type="date" id="filter-date-to" class="date-input" onchange="applyDateFilter()">
+                    <button class="btn-refresh" onclick="applyDateFilter()">Apply</button>
+                    <button class="btn-clear-date" onclick="clearDateFilter()">Clear</button>
+                </div>
+                <div class="events-controls">
+                    <label class="auto-refresh-toggle">
+                        <input type="checkbox" id="auto-refresh-check" checked>
+                        <span>Auto-refresh</span>
+                    </label>
+                    <button class="btn-refresh" onclick="loadEventsPage()">Refresh Now</button>
+                </div>
+                <div class="events-page-info">
+                    <span id="events-showing">-</span>
+                    <button id="events-prev" class="btn-page" disabled>&larr; Prev</button>
+                    <button id="events-next" class="btn-page">Next &rarr;</button>
+                </div>
+            </div>
+
+            <!-- Selection Bar -->
+            <div id="selection-bar" class="selection-bar">
+                <span><strong id="selected-count">0</strong> selected</span>
+                <button class="btn-select-all" onclick="selectAllEvents()">Select All</button>
+                <button class="btn-clear-sel" onclick="clearSelection()">Clear</button>
+                <button class="btn-delete" onclick="deleteSelected()">Delete Selected</button>
+            </div>
+
+            <!-- Events Grid -->
+            <div id="events-grid" class="events-grid">
+                <div class="no-data">Loading events...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== Image Lightbox ===== -->
+    <div id="lightbox" class="lightbox" onclick="closeLightbox(event)">
+        <div class="lightbox-content">
+            <button class="lightbox-close" onclick="closeLightbox()">&times;</button>
+            <img id="lightbox-img" src="" alt="Event Image">
+            <div id="lightbox-info" class="lightbox-info"></div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

@@ -361,3 +361,20 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+/event_images
+/people_search_queue/snapshot_2026-03-25T08-31-04-372Z.jpg
+/people_search_queue/snapshot_2026-03-25T08-31-08-148Z.jpg
+/people_search_queue/snapshot_2026-03-25T08-31-09-668Z.jpg
+/people_search_queue/snapshot_2026-03-25T08-31-10-796Z.jpg
+/people_search_queue/snapshot_2026-03-25T08-31-12-076Z.jpg
+/people_search_queue/snapshot_2026-03-25T08-31-15-085Z.jpg
+/people_search_queue/snapshot_2026-03-25T08-31-16-748Z.jpg
+/people_search_queue/snapshot_2026-03-25T08-31-17-940Z.jpg
+/camera/base.py
+/roi_events
+/venv
+/people_search_queue/ready/f1.jpg
+/people_search_queue/ready/f2.jpg
+/people_search_queue/ready/f3.jpg
+/people_search_queue/ready/known_faces.json
+/people_search_queue/ready/known_faces.json

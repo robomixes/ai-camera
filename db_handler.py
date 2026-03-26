@@ -109,6 +109,115 @@ def log_face_detection_event(name, distance, image_filename, is_known):
     except Exception as e:
         print(f"Error logging face event to DB: {e}")
 
+def _build_date_clause(date_from: str, date_to: str) -> tuple[str, list]:
+    """Build SQL WHERE clause for date filtering."""
+    clauses = []
+    params = []
+    if date_from:
+        clauses.append("timestamp >= ?")
+        params.append(f"{date_from} 00:00:00")
+    if date_to:
+        clauses.append("timestamp <= ?")
+        params.append(f"{date_to} 23:59:59")
+    where = (" AND " + " AND ".join(clauses)) if clauses else ""
+    return where, params
+
+
+def get_recent_events(limit: int = 50, event_type: str = "all", offset: int = 0,
+                      date_from: str = "", date_to: str = "") -> list:
+    """Query recent detection and face events for the web dashboard."""
+    events = []
+    date_where, date_params = _build_date_clause(date_from, date_to)
+    try:
+        conn = sqlite3.connect(config.DB_NAME)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        if event_type in ("all", "detection"):
+            cursor.execute(
+                "SELECT id, timestamp, camera_id, object_type, confidence, image_path, "
+                f"'detection' as event_type FROM detections WHERE 1=1{date_where} ORDER BY timestamp DESC",
+                date_params
+            )
+            for row in cursor.fetchall():
+                events.append(dict(row))
+
+        if event_type in ("all", "face"):
+            cursor.execute(
+                "SELECT id, timestamp, camera_id, person_name, distance, image_path, is_known, "
+                f"'face' as event_type FROM face_events WHERE 1=1{date_where} ORDER BY timestamp DESC",
+                date_params
+            )
+            for row in cursor.fetchall():
+                events.append(dict(row))
+
+        conn.close()
+
+        # Sort combined results by timestamp descending
+        events.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+        return events[offset:offset + limit]
+
+    except Exception as e:
+        print(f"Error querying events: {e}")
+        return []
+
+
+def get_event_count(event_type: str = "all", date_from: str = "", date_to: str = "") -> int:
+    """Get total count of events."""
+    total = 0
+    date_where, date_params = _build_date_clause(date_from, date_to)
+    try:
+        conn = sqlite3.connect(config.DB_NAME)
+        cursor = conn.cursor()
+
+        if event_type in ("all", "detection"):
+            cursor.execute(f"SELECT COUNT(*) FROM detections WHERE 1=1{date_where}", date_params)
+            total += cursor.fetchone()[0]
+
+        if event_type in ("all", "face"):
+            cursor.execute(f"SELECT COUNT(*) FROM face_events WHERE 1=1{date_where}", date_params)
+            total += cursor.fetchone()[0]
+
+        conn.close()
+    except Exception as e:
+        print(f"Error counting events: {e}")
+    return total
+
+
+def delete_events(ids: list) -> int:
+    """Delete events by their composite ids (type_id format, e.g. 'detection_5', 'face_12')."""
+    deleted = 0
+    try:
+        conn = sqlite3.connect(config.DB_NAME)
+        cursor = conn.cursor()
+
+        det_ids = []
+        face_ids = []
+        for eid in ids:
+            parts = str(eid).split("_", 1)
+            if len(parts) == 2:
+                if parts[0] == "detection":
+                    det_ids.append(int(parts[1]))
+                elif parts[0] == "face":
+                    face_ids.append(int(parts[1]))
+
+        if det_ids:
+            placeholders = ",".join("?" * len(det_ids))
+            cursor.execute(f"DELETE FROM detections WHERE id IN ({placeholders})", det_ids)
+            deleted += cursor.rowcount
+
+        if face_ids:
+            placeholders = ",".join("?" * len(face_ids))
+            cursor.execute(f"DELETE FROM face_events WHERE id IN ({placeholders})", face_ids)
+            deleted += cursor.rowcount
+
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"Error deleting events: {e}")
+    return deleted
+
+
 # Run initialization if script is executed directly
 if __name__ == "__main__":
     initialize_db()
