@@ -1,12 +1,14 @@
 """Standalone entry point for the AI Camera web dashboard."""
+import asyncio
 import logging
 import sys
 import uvicorn
 from web.server import create_app
 import config
 
-# Suppress noisy SSE disconnect errors
+# Suppress noisy SSE disconnect errors and asyncio connection resets
 logging.getLogger("sse_starlette").setLevel(logging.ERROR)
+logging.getLogger("asyncio").setLevel(logging.ERROR)
 
 app = create_app()
 

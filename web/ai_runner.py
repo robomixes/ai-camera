@@ -15,9 +15,10 @@ from camera.base import CameraBase
 class AIRunner:
     """Background thread that runs AI detection on camera frames and logs events."""
 
-    def __init__(self, cam: CameraBase, mode: str = "yolo"):
+    def __init__(self, cam: CameraBase, mode: str = "yolo", camera_id: str = "CAM_001"):
         self._cam = cam
         self._mode = mode
+        self._camera_id = camera_id
         self._running = False
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
@@ -198,6 +199,7 @@ class AIRunner:
                     "type": "person_detected",
                     "title": "Person Detected",
                     "detail": f"person ({conf:.0%} confidence)",
+                    "camera": self._camera_id,
                 })
 
             if "unknown_face" in alert_events and name == "Unknown":
@@ -205,6 +207,7 @@ class AIRunner:
                     "type": "unknown_face",
                     "title": "Unknown Face",
                     "detail": "Unrecognized face detected",
+                    "camera": self._camera_id,
                 })
 
             if "known_face" in alert_events and name and name not in ("Unknown", "No Database", ""):
@@ -212,6 +215,7 @@ class AIRunner:
                     "type": "known_face",
                     "title": f"{name} Detected",
                     "detail": f"Known person: {name}",
+                    "camera": self._camera_id,
                 })
 
         if alerts:
@@ -312,7 +316,8 @@ class AIRunner:
                     db_handler.log_detection(
                         detection_data=[{"class": det.get("label", "unknown"), "confidence": det.get("confidence", 0)}],
                         roi_area=None,
-                        image_filename=image_filename
+                        image_filename=image_filename,
+                        camera_id=self._camera_id,
                     )
 
             # Save and log face detections (to event_images/)
@@ -331,6 +336,7 @@ class AIRunner:
                         name=name,
                         distance=distance,
                         image_filename=image_filename,
+                        camera_id=self._camera_id,
                         is_known=is_known
                     )
 

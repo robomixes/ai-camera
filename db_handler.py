@@ -51,23 +51,26 @@ def initialize_db():
     conn.close()
     print("Database tables verified.")
 
-def log_detection(detection_data, roi_area, image_filename):
-    """Logs general object detections using config-defined paths and ID."""
+def log_detection(detection_data, roi_area, image_filename, camera_id="", latitude=None, longitude=None):
+    """Logs general object detections."""
+    cam_id = camera_id or config.CAMERA_ID
+    lat = latitude if latitude is not None else config.GPS_LATITUDE
+    lon = longitude if longitude is not None else config.GPS_LONGITUDE
     try:
         conn = sqlite3.connect(config.DB_NAME)
         cursor = conn.cursor()
-        
+
         for obj in detection_data:
             cursor.execute('''
                 INSERT INTO detections (
-                    camera_id, latitude, longitude, object_type, 
+                    camera_id, latitude, longitude, object_type,
                     confidence, roi_box, image_path
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             ''', (
-                config.CAMERA_ID, 
-                config.GPS_LATITUDE, 
-                config.GPS_LONGITUDE,
+                cam_id,
+                lat,
+                lon,
                 obj['class'], 
                 obj['confidence'], 
                 str(roi_area), 
@@ -79,24 +82,27 @@ def log_detection(detection_data, roi_area, image_filename):
     except Exception as e:
         print(f"Error logging detection to DB: {e}")
 
-def log_face_detection_event(name, distance, image_filename, is_known):
-    """Logs a Face Recognition event using config-defined paths and ID."""
+def log_face_detection_event(name, distance, image_filename, is_known, camera_id="", latitude=None, longitude=None):
+    """Logs a Face Recognition event."""
+    cam_id = camera_id or config.CAMERA_ID
+    lat = latitude if latitude is not None else config.GPS_LATITUDE
+    lon = longitude if longitude is not None else config.GPS_LONGITUDE
     try:
         conn = sqlite3.connect(config.DB_NAME)
         cursor = conn.cursor()
-        
+
         distance_text = f"{distance:.4f}"
-                
+
         cursor.execute('''
             INSERT INTO face_events (
-                camera_id, latitude, longitude, person_name, 
+                camera_id, latitude, longitude, person_name,
                 distance, image_path, is_known
             )
             VALUES (?, ?, ?, ?, ?, ?, ?)
         ''', (
-            config.CAMERA_ID, 
-            config.GPS_LATITUDE, 
-            config.GPS_LONGITUDE,
+            cam_id,
+            lat,
+            lon,
             name, 
             distance_text, 
             image_filename, 
@@ -124,10 +130,15 @@ def _build_date_clause(date_from: str, date_to: str) -> tuple[str, list]:
 
 
 def get_recent_events(limit: int = 50, event_type: str = "all", offset: int = 0,
-                      date_from: str = "", date_to: str = "") -> list:
+                      date_from: str = "", date_to: str = "", camera_id: str = "") -> list:
     """Query recent detection and face events for the web dashboard."""
     events = []
     date_where, date_params = _build_date_clause(date_from, date_to)
+    cam_where = ""
+    cam_params = []
+    if camera_id:
+        cam_where = " AND camera_id = ?"
+        cam_params = [camera_id]
     try:
         conn = sqlite3.connect(config.DB_NAME)
         conn.row_factory = sqlite3.Row
@@ -136,8 +147,8 @@ def get_recent_events(limit: int = 50, event_type: str = "all", offset: int = 0,
         if event_type in ("all", "detection"):
             cursor.execute(
                 "SELECT id, timestamp, camera_id, object_type, confidence, image_path, "
-                f"'detection' as event_type FROM detections WHERE 1=1{date_where} ORDER BY timestamp DESC",
-                date_params
+                f"'detection' as event_type FROM detections WHERE 1=1{date_where}{cam_where} ORDER BY timestamp DESC",
+                date_params + cam_params
             )
             for row in cursor.fetchall():
                 events.append(dict(row))
@@ -145,8 +156,8 @@ def get_recent_events(limit: int = 50, event_type: str = "all", offset: int = 0,
         if event_type in ("all", "face"):
             cursor.execute(
                 "SELECT id, timestamp, camera_id, person_name, distance, image_path, is_known, "
-                f"'face' as event_type FROM face_events WHERE 1=1{date_where} ORDER BY timestamp DESC",
-                date_params
+                f"'face' as event_type FROM face_events WHERE 1=1{date_where}{cam_where} ORDER BY timestamp DESC",
+                date_params + cam_params
             )
             for row in cursor.fetchall():
                 events.append(dict(row))
@@ -162,20 +173,25 @@ def get_recent_events(limit: int = 50, event_type: str = "all", offset: int = 0,
         return []
 
 
-def get_event_count(event_type: str = "all", date_from: str = "", date_to: str = "") -> int:
+def get_event_count(event_type: str = "all", date_from: str = "", date_to: str = "", camera_id: str = "") -> int:
     """Get total count of events."""
     total = 0
     date_where, date_params = _build_date_clause(date_from, date_to)
+    cam_where = ""
+    cam_params = []
+    if camera_id:
+        cam_where = " AND camera_id = ?"
+        cam_params = [camera_id]
     try:
         conn = sqlite3.connect(config.DB_NAME)
         cursor = conn.cursor()
 
         if event_type in ("all", "detection"):
-            cursor.execute(f"SELECT COUNT(*) FROM detections WHERE 1=1{date_where}", date_params)
+            cursor.execute(f"SELECT COUNT(*) FROM detections WHERE 1=1{date_where}{cam_where}", date_params + cam_params)
             total += cursor.fetchone()[0]
 
         if event_type in ("all", "face"):
-            cursor.execute(f"SELECT COUNT(*) FROM face_events WHERE 1=1{date_where}", date_params)
+            cursor.execute(f"SELECT COUNT(*) FROM face_events WHERE 1=1{date_where}{cam_where}", date_params + cam_params)
             total += cursor.fetchone()[0]
 
         conn.close()

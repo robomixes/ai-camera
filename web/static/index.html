@@ -13,6 +13,9 @@
             <h1>AI Camera</h1>
             <span id="camera-info" class="header-info">-</span>
         </div>
+        <div id="camera-selector" class="camera-selector" style="display:none">
+            <select id="camera-select" onchange="switchCamera(this.value)"></select>
+        </div>
         <nav class="tab-nav">
             <button class="tab-btn active" data-tab="home">Home</button>
             <button class="tab-btn" data-tab="live">Live</button>
@@ -132,6 +135,11 @@
             <div class="video-section">
                 <div class="video-panel">
                     <img id="stream-img" src="/stream" alt="Live Stream">
+                <div id="no-signal" class="no-signal" style="display:none">
+                    <div class="no-signal-icon">&#9888;</div>
+                    <div class="no-signal-text">No Signal</div>
+                    <div class="no-signal-sub">Camera is not responding</div>
+                </div>
                     <div class="video-overlay top-left">
                         <span id="fps-badge" class="badge badge-fps">0 FPS</span>
                     </div>
@@ -218,10 +226,11 @@
                                     <th>Time</th>
                                     <th>Type</th>
                                     <th>Detail</th>
+                                    <th>Camera</th>
                                 </tr>
                             </thead>
                             <tbody id="event-tbody">
-                                <tr><td colspan="3" class="no-data">Loading...</td></tr>
+                                <tr><td colspan="4" class="no-data">Loading...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -240,6 +249,12 @@
                     <button class="filter-btn active" data-filter="all">All</button>
                     <button class="filter-btn" data-filter="detection">Detections</button>
                     <button class="filter-btn" data-filter="face">Faces</button>
+                </div>
+                <div class="filter-group">
+                    <label>Camera:</label>
+                    <select id="filter-camera" class="date-input" onchange="applyCameraFilter()">
+                        <option value="">All Cameras</option>
+                    </select>
                 </div>
                 <div class="filter-group date-filter">
                     <label>From:</label>
@@ -330,6 +345,24 @@
             <div class="settings-actions">
                 <button class="btn-save-settings" onclick="saveSettings()">Save Changes</button>
                 <span id="settings-status" class="settings-status"></span>
+            </div>
+
+            <!-- Camera Management -->
+            <h3 class="settings-section-title">Camera Management <span class="settings-hint">Requires restart after changes</span></h3>
+            <div class="card settings-card">
+                <div class="card-header">
+                    <span>Configured Cameras</span>
+                    <button class="btn-refresh" onclick="addCameraRow()">+ Add Camera</button>
+                </div>
+                <div class="card-body">
+                    <div id="cameras-list" class="cameras-list">
+                        <div class="no-data">Loading...</div>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 12px; margin-top: 12px;">
+                        <button class="btn-save-settings" onclick="saveCamerasConfig()">Save Cameras</button>
+                        <span id="cameras-status" class="settings-status"></span>
+                    </div>
+                </div>
             </div>
 
             <!-- Change Password -->

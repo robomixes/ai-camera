@@ -1,10 +1,87 @@
+// ===== Camera Selection =====
+let currentCameraId = "";
+
+async function loadCameras() {
+    try {
+        const resp = await fetch("/api/cameras");
+        const data = await resp.json();
+        const cameras = data.cameras || [];
+        const selector = document.getElementById("camera-selector");
+        const select = document.getElementById("camera-select");
+
+        if (cameras.length <= 1) {
+            selector.style.display = "none";
+            currentCameraId = cameras.length === 1 ? cameras[0].id : "";
+            return;
+        }
+
+        selector.style.display = "block";
+        select.innerHTML = cameras.map(c =>
+            `<option value="${c.id}" ${c.id === currentCameraId ? "selected" : ""}>${c.description || c.id}</option>`
+        ).join("");
+
+        if (!currentCameraId && cameras.length > 0) {
+            currentCameraId = cameras[0].id;
+        }
+    } catch (e) {
+        console.error("Failed to load cameras:", e);
+    }
+}
+
+function switchCamera(cameraId) {
+    currentCameraId = cameraId;
+    // Reconnect SSE for new camera
+    connectSSE();
+    // Show loading state, then switch stream
+    const streamImg = document.getElementById("stream-img");
+    const noSignal = document.getElementById("no-signal");
+    if (streamImg) {
+        streamImg.style.display = "none";
+        if (noSignal) noSignal.style.display = "flex";
+        // Set new stream URL — will auto-show when frames arrive
+        const newSrc = `/stream${cameraId ? '?camera_id=' + cameraId : ''}`;
+        streamImg.onload = () => {
+            streamImg.style.display = "block";
+            if (noSignal) noSignal.style.display = "none";
+            streamImg.onload = null; // only first frame
+        };
+        streamImg.onerror = () => {
+            streamImg.style.display = "none";
+            if (noSignal) noSignal.style.display = "flex";
+        };
+        streamImg.src = newSrc;
+        // Timeout: if no frame in 5 seconds, show no signal
+        setTimeout(() => {
+            if (streamImg.style.display === "none") {
+                if (noSignal) noSignal.style.display = "flex";
+            }
+        }, 5000);
+    }
+    // Reload events and dashboard for new camera
+    loadEvents();
+    const homeTab = document.getElementById("tab-home");
+    if (homeTab && homeTab.classList.contains("active")) {
+        loadHomeDashboard();
+    }
+    const eventsTab = document.getElementById("tab-events");
+    if (eventsTab && eventsTab.classList.contains("active")) {
+        eventsOffset = 0;
+        loadEventsPage();
+    }
+}
+
+function _camParam() {
+    return currentCameraId ? `camera_id=${currentCameraId}` : "";
+}
+
 // ===== SSE Detection Stream =====
 let evtSource = null;
 let currentMode = "yolo";
 
 function connectSSE() {
     if (evtSource) evtSource.close();
-    evtSource = new EventSource("/stream/events");
+    const camParam = _camParam();
+    evtSource = new EventSource(`/stream/events${camParam ? '?' + camParam : ''}`);
 
     evtSource.addEventListener("detections", (e) => {
         const data = JSON.parse(e.data);
@@ -41,6 +118,19 @@ function updateStatus(connected) {
 function updateFPS(fps) {
     document.getElementById("fps-badge").textContent = fps.toFixed(1) + " FPS";
     document.getElementById("stat-fps").textContent = fps.toFixed(1);
+
+    // Show/hide no signal based on FPS
+    const noSignal = document.getElementById("no-signal");
+    const streamImg = document.getElementById("stream-img");
+    if (noSignal && streamImg) {
+        if (fps === 0) {
+            streamImg.style.display = "none";
+            noSignal.style.display = "flex";
+        } else if (streamImg.style.display === "none") {
+            streamImg.style.display = "block";
+            noSignal.style.display = "none";
+        }
+    }
 }
 
 function updateMode(mode) {
@@ -139,7 +229,7 @@ async function loadEvents() {
         const tbody = document.getElementById("event-tbody");
 
         if (!data.events || data.events.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="3" class="no-data">No events yet</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="4" class="no-data">No events yet</td></tr>';
             return;
         }
 
@@ -147,6 +237,7 @@ async function loadEvents() {
             const time = ev.timestamp ? ev.timestamp.substring(11, 19) || ev.timestamp : "-";
             const type = ev.event_type || "-";
             const typeClass = type === "detection" ? "detection" : "face";
+            const camId = ev.camera_id || "-";
             let detail = "";
             if (type === "detection") {
                 const conf = ev.confidence ? (ev.confidence * 100).toFixed(0) + "%" : "";
@@ -160,6 +251,7 @@ async function loadEvents() {
                 <td>${time}</td>
                 <td><span class="event-type ${typeClass}">${type}</span></td>
                 <td>${detail}</td>
+                <td class="cam-id-cell">${camId}</td>
             </tr>`;
         }).join("");
     } catch (e) {
@@ -176,6 +268,7 @@ let lastKnownEventCount = 0;
 let eventsAutoRefresh = true;
 let eventsDateFrom = "";
 let eventsDateTo = "";
+let eventsCameraFilter = "";
 
 async function loadEventsPage() {
     const grid = document.getElementById("events-grid");
@@ -185,6 +278,7 @@ async function loadEventsPage() {
         let url = `/api/events?limit=${eventsPageSize}&offset=${eventsOffset}&event_type=${eventsFilter}`;
         if (eventsDateFrom) url += `&date_from=${eventsDateFrom}`;
         if (eventsDateTo) url += `&date_to=${eventsDateTo}`;
+        if (eventsCameraFilter) url += `&camera_id=${eventsCameraFilter}`;
         const resp = await fetch(url);
         const data = await resp.json();
 
@@ -232,7 +326,7 @@ async function loadEventsPage() {
                 <div class="event-card-body">
                     <div class="event-card-title">${title}</div>
                     <div class="event-card-sub">${subtitle}</div>
-                    <div class="event-card-time">${time}</div>
+                    <div class="event-card-time">${time} <span class="event-card-cam">${ev.camera_id || ""}</span></div>
                 </div>
             </div>`;
         }).join("");
@@ -371,6 +465,25 @@ function closeLightbox(event) {
 
 // ===== Date Filter =====
 
+function applyCameraFilter() {
+    eventsCameraFilter = document.getElementById("filter-camera").value;
+    eventsOffset = 0;
+    loadEventsPage();
+}
+
+async function populateCameraFilter() {
+    try {
+        const resp = await fetch("/api/cameras");
+        const data = await resp.json();
+        const select = document.getElementById("filter-camera");
+        if (!select) return;
+
+        const cameras = data.cameras || [];
+        select.innerHTML = '<option value="">All Cameras</option>' +
+            cameras.map(c => `<option value="${c.id}">${c.description || c.id}</option>`).join("");
+    } catch (e) {}
+}
+
 function applyDateFilter() {
     eventsDateFrom = document.getElementById("filter-date-from").value || "";
     eventsDateTo = document.getElementById("filter-date-to").value || "";
@@ -435,6 +548,7 @@ function switchTab(tabName) {
         const badge = document.getElementById("events-badge");
         badge.classList.remove("visible");
         badge.textContent = "0";
+        populateCameraFilter();
         loadEventsPage();
     }
     if (tabName === "faces") {
@@ -442,6 +556,7 @@ function switchTab(tabName) {
     }
     if (tabName === "settings") {
         loadSettings();
+        loadCamerasConfig();
     }
 }
 
@@ -495,7 +610,8 @@ function handleAlert(data) {
 
     // Show toast
     if (prefs.toast !== false) {
-        showToast(data.title, data.detail);
+        const camLabel = data.camera ? ` [${data.camera}]` : "";
+        showToast(data.title + camLabel, data.detail);
     }
 
     // Play sound
@@ -559,10 +675,11 @@ function renderNotifList() {
     }
     list.innerHTML = notifHistory.map(n => {
         const typeClass = n.type === "unknown_face" ? "alert-unknown" : n.type === "known_face" ? "alert-known" : "alert-person";
+        const cam = n.camera ? ` | ${n.camera}` : "";
         return `<li class="notif-item ${typeClass}">
             <span class="notif-title">${n.title}</span>
             <span class="notif-detail">${n.detail}</span>
-            <span class="notif-time">${n.time}</span>
+            <span class="notif-time">${n.time}${cam}</span>
         </li>`;
     }).join("");
 }
@@ -639,6 +756,155 @@ async function changePassword() {
             document.getElementById("pw-confirm").value = "";
         } else {
             statusEl.textContent = data.error || "Failed to change password";
+            statusEl.className = "settings-status error";
+        }
+    } catch (e) {
+        statusEl.textContent = "Connection error";
+        statusEl.className = "settings-status error";
+    }
+}
+
+// ===== Camera Management =====
+
+let camerasConfig = [];
+
+async function loadCamerasConfig() {
+    const container = document.getElementById("cameras-list");
+    try {
+        const resp = await fetch("/api/cameras/config");
+        const data = await resp.json();
+        camerasConfig = data.cameras || [];
+        renderCameraRows();
+    } catch (e) {
+        container.innerHTML = '<div class="no-data">Failed to load cameras</div>';
+    }
+}
+
+function renderCameraRows() {
+    const container = document.getElementById("cameras-list");
+    if (camerasConfig.length === 0) {
+        container.innerHTML = '<div class="no-data">No cameras configured. Click "+ Add Camera" to add one.</div>';
+        return;
+    }
+
+    container.innerHTML = camerasConfig.map((cam, i) => `
+        <div class="camera-config-row" data-index="${i}">
+            <div class="camera-config-header">
+                <span class="camera-config-title">${cam.id || 'New Camera'} — ${cam.description || ''}</span>
+                <button class="btn-delete-person" onclick="removeCameraRow(${i})" title="Remove camera">&times;</button>
+            </div>
+            <div class="camera-config-fields">
+                <div class="cam-field">
+                    <label>ID</label>
+                    <input type="text" value="${cam.id || ''}" onchange="updateCamField(${i}, 'id', this.value)" placeholder="CAM_001">
+                </div>
+                <div class="cam-field">
+                    <label>Description</label>
+                    <input type="text" value="${cam.description || ''}" onchange="updateCamField(${i}, 'description', this.value)" placeholder="Front Gate">
+                </div>
+                <div class="cam-field cam-field-wide">
+                    <label>RTSP URL</label>
+                    <input type="text" value="${cam.url || ''}" onchange="updateCamField(${i}, 'url', this.value)" placeholder="rtsp://admin:pass@192.168.1.9/h264Preview_01_sub">
+                </div>
+                <div class="cam-field">
+                    <label>Type</label>
+                    <select onchange="updateCamField(${i}, 'type', this.value)">
+                        <option value="rtsp" ${cam.type === 'rtsp' ? 'selected' : ''}>RTSP</option>
+                        <option value="picamera" ${cam.type === 'picamera' ? 'selected' : ''}>Picamera</option>
+                    </select>
+                </div>
+                <div class="cam-field">
+                    <label>Transport</label>
+                    <select onchange="updateCamField(${i}, 'transport', this.value)">
+                        <option value="tcp" ${cam.transport === 'tcp' ? 'selected' : ''}>TCP</option>
+                        <option value="udp" ${cam.transport === 'udp' ? 'selected' : ''}>UDP</option>
+                    </select>
+                </div>
+                <div class="cam-field">
+                    <label>AI Mode</label>
+                    <select onchange="updateCamField(${i}, 'ai_mode', this.value)">
+                        <option value="yolo" ${cam.ai_mode === 'yolo' ? 'selected' : ''}>YOLO</option>
+                        <option value="facenet" ${cam.ai_mode === 'facenet' ? 'selected' : ''}>FaceNet</option>
+                        <option value="both" ${cam.ai_mode === 'both' ? 'selected' : ''}>Both</option>
+                        ${!cam.ai_mode ? '<option value="" selected>Default</option>' : ''}
+                    </select>
+                </div>
+                <div class="cam-field">
+                    <label>Width</label>
+                    <input type="number" value="${cam.width || 1280}" onchange="updateCamField(${i}, 'width', parseInt(this.value))">
+                </div>
+                <div class="cam-field">
+                    <label>Height</label>
+                    <input type="number" value="${cam.height || 720}" onchange="updateCamField(${i}, 'height', parseInt(this.value))">
+                </div>
+                <div class="cam-field">
+                    <label>Latitude</label>
+                    <input type="number" step="0.0001" value="${cam.latitude || 0}" onchange="updateCamField(${i}, 'latitude', parseFloat(this.value))">
+                </div>
+                <div class="cam-field">
+                    <label>Longitude</label>
+                    <input type="number" step="0.0001" value="${cam.longitude || 0}" onchange="updateCamField(${i}, 'longitude', parseFloat(this.value))">
+                </div>
+            </div>
+        </div>
+    `).join("");
+}
+
+function updateCamField(index, field, value) {
+    if (camerasConfig[index]) {
+        camerasConfig[index][field] = value;
+    }
+}
+
+function addCameraRow() {
+    const newId = `CAM_${String(camerasConfig.length + 1).padStart(3, '0')}`;
+    camerasConfig.push({
+        id: newId,
+        description: "",
+        type: "rtsp",
+        url: "",
+        transport: "tcp",
+        width: 1280,
+        height: 720,
+        latitude: 0,
+        longitude: 0,
+        ai_mode: "both",
+    });
+    renderCameraRows();
+}
+
+function removeCameraRow(index) {
+    const cam = camerasConfig[index];
+    if (!confirm(`Remove camera "${cam.id || 'New'}"?`)) return;
+    camerasConfig.splice(index, 1);
+    renderCameraRows();
+}
+
+async function saveCamerasConfig() {
+    const statusEl = document.getElementById("cameras-status");
+
+    // Validate
+    for (const cam of camerasConfig) {
+        if (!cam.id) {
+            statusEl.textContent = "All cameras must have an ID.";
+            statusEl.className = "settings-status error";
+            return;
+        }
+    }
+
+    try {
+        const resp = await fetch("/api/cameras/config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ cameras: camerasConfig })
+        });
+        const data = await resp.json();
+
+        if (resp.ok) {
+            statusEl.textContent = `${data.saved} camera(s) saved. ${data.message}`;
+            statusEl.className = "settings-status success";
+        } else {
+            statusEl.textContent = data.error || "Failed to save";
             statusEl.className = "settings-status error";
         }
     } catch (e) {
@@ -956,7 +1222,7 @@ async function loadHomeRecentEvents() {
                 </div>
                 <div class="recent-event-info">
                     <span class="recent-event-detail">${detail}</span>
-                    <span class="recent-event-time">${time}</span>
+                    <span class="recent-event-time">${time} ${ev.camera_id ? '| ' + ev.camera_id : ''}</span>
                 </div>
                 <span class="event-type ${typeClass}">${type}</span>
             </div>`;
@@ -1110,7 +1376,7 @@ async function setMode(mode) {
         const resp = await fetch("/api/ai/mode", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ mode })
+            body: JSON.stringify({ mode, camera_id: currentCameraId })
         });
         if (resp.ok) updateMode(mode);
     } catch (e) {
@@ -1146,11 +1412,13 @@ async function pollStatus() {
 // ===== Init =====
 
 document.addEventListener("DOMContentLoaded", () => {
-    connectSSE();
-    loadEvents();
-    pollStatus();
-    loadNotifPrefs();
-    loadHomeDashboard();
+    loadCameras().then(() => {
+        connectSSE();
+        loadEvents();
+        pollStatus();
+        loadNotifPrefs();
+        loadHomeDashboard();
+    });
 
     // Auto-refresh home dashboard every 30 seconds
     setInterval(() => {

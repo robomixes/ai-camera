@@ -20,54 +20,42 @@ from camera import create_camera
 from camera.base import CameraBase
 from web.ai_runner import AIRunner
 from web.auth import initialize_auth, verify_login, change_password, create_session, get_session_user, delete_session
+from web.camera_manager import CameraManager
 from web.utils import encode_jpeg, resize_frame
 
 _faces_lock = threading.Lock()
 
 # --- Globals set during lifespan ---
-_cam: CameraBase | None = None
-_ai_runner: AIRunner | None = None
+_manager: CameraManager | None = None
 
 STATIC_DIR = Path(__file__).parent / "static"
 
 
+def _get_cam(camera_id: str = ""):
+    """Helper to get camera from manager."""
+    return _manager.get_camera(camera_id) if _manager else None
+
+def _get_runner(camera_id: str = ""):
+    """Helper to get AI runner from manager."""
+    return _manager.get_runner(camera_id) if _manager else None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _cam, _ai_runner
+    global _manager
 
     # Startup
     initialize_auth()
     db_handler.initialize_db()
 
-    _cam = create_camera(
-        camera_type=config.CAMERA_TYPE,
-        url=config.RTSP_URL,
-        transport=config.RTSP_TRANSPORT,
-        width=config.FRAME_WIDTH,
-        height=config.FRAME_HEIGHT,
-    )
-    _cam.start()
-
-    # Wait for first frame
-    print("Web: Waiting for camera stream...")
-    for _ in range(150):
-        if _cam.get_frame() is not None:
-            print("Web: Camera stream ready.")
-            break
-        await asyncio.sleep(0.1)
-    else:
-        print("Web: WARNING - No frames received after 15s.")
-
-    _ai_runner = AIRunner(_cam, mode="yolo")
-    _ai_runner.start()
+    _manager = CameraManager()
+    _manager.start_all()
 
     yield
 
     # Shutdown
-    if _ai_runner:
-        _ai_runner.stop()
-    if _cam:
-        _cam.stop()
+    if _manager:
+        _manager.stop_all()
 
 
 def create_app() -> FastAPI:
@@ -145,20 +133,21 @@ def create_app() -> FastAPI:
 
     # --- MJPEG Stream ---
     @app.get("/stream")
-    async def mjpeg_stream():
+    async def mjpeg_stream(camera_id: str = ""):
         return StreamingResponse(
-            _mjpeg_generator(),
+            _mjpeg_generator(camera_id),
             media_type="multipart/x-mixed-replace; boundary=frame"
         )
 
-    async def _mjpeg_generator():
+    async def _mjpeg_generator(camera_id: str = ""):
         target_fps = getattr(config, "STREAM_TARGET_FPS", 10)
         max_width = getattr(config, "STREAM_MAX_WIDTH", 960)
         jpeg_quality = getattr(config, "STREAM_JPEG_QUALITY", 70)
         interval = 1.0 / target_fps
 
         while True:
-            frame, _ = _ai_runner.get_latest() if _ai_runner else (None, [])
+            runner = _get_runner(camera_id)
+            frame, _ = runner.get_latest() if runner else (None, [])
             if frame is not None:
                 small = resize_frame(frame, max_width)
                 jpg = encode_jpeg(small, jpeg_quality)
@@ -172,18 +161,19 @@ def create_app() -> FastAPI:
 
     # --- SSE Detection Events ---
     @app.get("/stream/events")
-    async def sse_detections(request: Request):
-        return EventSourceResponse(_detection_generator(request))
+    async def sse_detections(request: Request, camera_id: str = ""):
+        return EventSourceResponse(_detection_generator(request, camera_id))
 
-    async def _detection_generator(request: Request):
+    async def _detection_generator(request: Request, camera_id: str = ""):
         prev_detections = None
 
         try:
             while True:
                 if await request.is_disconnected():
                     break
-                if _ai_runner:
-                    _, detections = _ai_runner.get_latest()
+                runner = _get_runner(camera_id)
+                if runner:
+                    _, detections = runner.get_latest()
                     det_str = json.dumps(detections)
                     if det_str != prev_detections:
                         prev_detections = det_str
@@ -191,13 +181,13 @@ def create_app() -> FastAPI:
                             "event": "detections",
                             "data": json.dumps({
                                 "detections": detections,
-                                "fps": round(_ai_runner.fps, 1),
-                                "mode": _ai_runner.mode,
+                                "fps": round(runner.fps, 1),
+                                "mode": runner.mode,
                             })
                         }
 
                     # Emit alerts from the AI runner's smart logging
-                    alerts = _ai_runner.get_pending_alerts()
+                    alerts = runner.get_pending_alerts()
                     for alert in alerts:
                         yield {
                             "event": "alert",
@@ -210,18 +200,93 @@ def create_app() -> FastAPI:
 
     # --- REST API ---
     @app.get("/api/status")
-    async def status():
+    async def status(camera_id: str = ""):
+        cam = _get_cam(camera_id)
+        runner = _get_runner(camera_id)
         return {
-            "camera_connected": _cam.is_running() if _cam else False,
+            "camera_connected": cam.is_running() if cam else False,
             "camera_type": config.CAMERA_TYPE,
-            "frame_size": list(_cam.frame_size) if _cam else None,
-            "ai_mode": _ai_runner.mode if _ai_runner else None,
-            "ai_fps": round(_ai_runner.fps, 1) if _ai_runner else 0,
+            "frame_size": list(cam.frame_size) if cam else None,
+            "ai_mode": runner.mode if runner else None,
+            "ai_fps": round(runner.fps, 1) if runner else 0,
+            "cameras": _manager.list_cameras() if _manager else [],
+            "multi_camera": _manager.is_multi if _manager else False,
         }
 
+    @app.get("/api/cameras")
+    async def list_cameras():
+        return {"cameras": _manager.list_cameras() if _manager else []}
+
+    @app.get("/api/cameras/config")
+    async def get_cameras_config():
+        """Get the raw camera configuration list."""
+        cameras = config.CAMERAS if config.CAMERAS else []
+        # If no CAMERAS list, show the current single-camera as a config entry
+        if not cameras:
+            cameras = [{
+                "id": config.CAMERA_ID,
+                "description": getattr(config, "CAMERA_DESCRIPTION", ""),
+                "type": config.CAMERA_TYPE,
+                "url": config.RTSP_URL,
+                "transport": config.RTSP_TRANSPORT,
+                "width": config.FRAME_WIDTH,
+                "height": config.FRAME_HEIGHT,
+                "latitude": getattr(config, "GPS_LATITUDE", 0),
+                "longitude": getattr(config, "GPS_LONGITUDE", 0),
+            }]
+        return {"cameras": cameras}
+
+    @app.post("/api/cameras/config")
+    async def save_cameras_config(request: Request):
+        """Save camera configuration. Requires restart to take effect."""
+        body = await request.json()
+        cameras = body.get("cameras", [])
+
+        # Validate
+        for i, cam in enumerate(cameras):
+            if not cam.get("id"):
+                return JSONResponse({"error": f"Camera {i+1} missing 'id'"}, status_code=400)
+            if not cam.get("url") and cam.get("type") == "rtsp":
+                return JSONResponse({"error": f"Camera '{cam['id']}' missing 'url'"}, status_code=400)
+
+            # Set defaults
+            cam.setdefault("description", cam["id"])
+            cam.setdefault("type", "rtsp")
+            cam.setdefault("transport", "tcp")
+            cam.setdefault("width", 1280)
+            cam.setdefault("height", 720)
+            cam.setdefault("latitude", 0.0)
+            cam.setdefault("longitude", 0.0)
+
+        # Save to config and persist
+        config.CAMERAS = cameras
+        overrides = {"CAMERAS": cameras}
+
+        # Keep legacy single-camera fields in sync with the first camera
+        if cameras:
+            first = cameras[0]
+            overrides["CAMERA_ID"] = first.get("id", "CAM_001")
+            overrides["CAMERA_DESCRIPTION"] = first.get("description", "")
+            overrides["CAMERA_TYPE"] = first.get("type", "rtsp")
+            overrides["RTSP_URL"] = first.get("url", "")
+            overrides["RTSP_TRANSPORT"] = first.get("transport", "tcp")
+            overrides["FRAME_WIDTH"] = first.get("width", 1280)
+            overrides["FRAME_HEIGHT"] = first.get("height", 720)
+            overrides["GPS_LATITUDE"] = first.get("latitude", 0)
+            overrides["GPS_LONGITUDE"] = first.get("longitude", 0)
+            # Apply to runtime config too
+            for k, v in overrides.items():
+                if k != "CAMERAS":
+                    setattr(config, k, v)
+
+        config.save_overrides(overrides)
+
+        return {"saved": len(cameras), "message": "Restart the server to apply changes."}
+
     @app.get("/api/snapshot")
-    async def snapshot():
-        frame = _cam.get_frame() if _cam else None
+    async def snapshot(camera_id: str = ""):
+        cam = _get_cam(camera_id)
+        frame = cam.get_frame() if cam else None
         if frame is None:
             return JSONResponse({"error": "No frame available"}, status_code=503)
         jpg = encode_jpeg(frame)
@@ -233,12 +298,12 @@ def create_app() -> FastAPI:
 
     @app.get("/api/events")
     async def get_events(limit: int = 50, event_type: str = "all", offset: int = 0,
-                         date_from: str = "", date_to: str = ""):
+                         date_from: str = "", date_to: str = "", camera_id: str = ""):
         events = db_handler.get_recent_events(
             limit=limit, event_type=event_type, offset=offset,
-            date_from=date_from, date_to=date_to
+            date_from=date_from, date_to=date_to, camera_id=camera_id
         )
-        total = db_handler.get_event_count(event_type=event_type, date_from=date_from, date_to=date_to)
+        total = db_handler.get_event_count(event_type=event_type, date_from=date_from, date_to=date_to, camera_id=camera_id)
         return {"events": events, "total": total, "offset": offset, "limit": limit}
 
     @app.post("/api/events/delete")
@@ -275,13 +340,26 @@ def create_app() -> FastAPI:
     async def set_ai_mode(request: Request):
         body = await request.json()
         mode = body.get("mode", "yolo")
+        cam_id = body.get("camera_id", "")
         if mode not in ("yolo", "facenet", "both", "off"):
             return JSONResponse({"error": "Invalid mode"}, status_code=400)
-        if _ai_runner:
-            if mode == "off":
-                _ai_runner.stop()
-            else:
-                _ai_runner.mode = mode
+
+        # Apply to specific camera or all cameras
+        if cam_id:
+            runner = _get_runner(cam_id)
+            if runner:
+                if mode == "off":
+                    runner.stop()
+                else:
+                    runner.mode = mode
+        elif _manager:
+            for cid in _manager.camera_ids:
+                runner = _manager.get_runner(cid)
+                if runner:
+                    if mode == "off":
+                        runner.stop()
+                    else:
+                        runner.mode = mode
         return {"mode": mode}
 
     # --- Settings API ---
@@ -290,6 +368,7 @@ def create_app() -> FastAPI:
         "CAMERA_DESCRIPTION": {"type": "string", "description": "Camera location/description", "category": "Camera"},
         "GPS_LATITUDE": {"type": "float", "min": -90, "max": 90, "description": "Camera GPS latitude", "category": "Camera"},
         "GPS_LONGITUDE": {"type": "float", "min": -180, "max": 180, "description": "Camera GPS longitude", "category": "Camera"},
+        "DEFAULT_AI_MODE": {"type": "string", "description": "Default AI mode: yolo, facenet, or both", "category": "Detection"},
         "LOG_DELAY_SECONDS": {"type": "float", "min": 0.5, "max": 60, "description": "Seconds between event logs", "category": "Detection"},
         "DETECTION_CLASSES": {"type": "list", "description": "Object classes to detect (comma-separated)", "category": "Detection"},
         "RECOGNITION_THRESHOLD": {"type": "float", "min": 0.1, "max": 2.0, "description": "Distance below which a face is 'known'", "category": "Face Recognition"},

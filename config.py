@@ -94,12 +94,33 @@ STREAM_JPEG_QUALITY = 70
 STREAM_MAX_WIDTH = 960
 STREAM_TARGET_FPS = 10
 
+# --- Default AI Mode (for single-camera setup) ---
+DEFAULT_AI_MODE = "both"  # "yolo", "facenet", or "both"
+
 # --- Smart Logging ---
 DETECTION_COOLDOWN_SECONDS = 60.0  # Don't re-log the same detection for this many seconds
 
 # --- Alerts ---
 ALERT_ENABLED = True
 ALERT_EVENTS = ["unknown_face", "person_detected", "known_face"]
+
+# --- Multi-Camera Support ---
+# If CAMERAS is empty, falls back to single-camera config above.
+# Each entry: {"id": "...", "description": "...", "type": "rtsp", "url": "rtsp://...",
+#              "transport": "tcp", "width": 1280, "height": 720,
+#              "latitude": 0.0, "longitude": 0.0, "ai_mode": "both"}
+CAMERAS = []
+# Example:
+# CAMERAS = [
+#     {"id": "CAM_001", "description": "Front Gate", "type": "rtsp",
+#      "url": "rtsp://admin:pass@192.168.1.9/h264Preview_01_sub",
+#      "transport": "tcp", "width": 1280, "height": 720,
+#      "latitude": 48.8584, "longitude": 2.2945, "ai_mode": "both"},
+#     {"id": "CAM_002", "description": "Back Door", "type": "rtsp",
+#      "url": "rtsp://admin:pass@192.168.1.10/h264Preview_01_sub",
+#      "transport": "tcp", "width": 1280, "height": 720,
+#      "latitude": 48.8585, "longitude": 2.2946, "ai_mode": "yolo"},
+# ]
 
 # --- Load any persisted runtime overrides (must be last) ---
 _load_overrides()
