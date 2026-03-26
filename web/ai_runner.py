@@ -139,33 +139,28 @@ class AIRunner:
         return analyzed_frame, detections
 
     def _run_both(self, frame_bgr: np.ndarray) -> tuple[np.ndarray, list]:
-        """Run YOLO and FaceNet on the same clean frame, merge results."""
+        """Run YOLO and FaceNet on the same frame, merge results."""
         if frame_bgr.dtype != np.uint8:
             frame_bgr = frame_bgr.astype(np.uint8)
 
-        # Both get a clean copy of the original frame
+        # YOLO on clean frame — returns annotated frame with object boxes
         yolo_frame, yolo_dets = ai_features.run_yolov8_detection(
             frame_bgr.copy(), self._cam.frame_size,
             roi=None, classes_filter=config.DETECTION_CLASSES
         )
 
+        # FaceNet on clean frame — returns annotated frame with face boxes
         face_frame, face_data = face_rec.run_facenet_recognition(
             frame_bgr.copy(), self._cam.frame_size
         )
         face_rec.process_deferred_logs()
 
-        # Combine: start with YOLO frame, overlay face annotations
-        # Face annotations are drawn as rectangles+text on face_frame
-        # We find pixels that differ between face_frame and clean frame
-        diff = cv2.absdiff(face_frame, frame_bgr)
-        gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
-        _, mask = cv2.threshold(gray_diff, 5, 255, cv2.THRESH_BINARY)
-        # Dilate to fill gaps in text/lines
-        kernel = np.ones((3, 3), np.uint8)
-        mask = cv2.dilate(mask, kernel, iterations=1)
-        # Copy face annotations onto yolo frame
-        yolo_frame[mask > 0] = face_frame[mask > 0]
-        face_frame = yolo_frame
+        # Simple merge: draw face_frame on top of yolo_frame using addWeighted
+        # This preserves both sets of annotations clearly
+        combined = cv2.addWeighted(yolo_frame, 0.5, face_frame, 0.5, 0)
+        # Re-overlay annotations by keeping the brighter pixels from either frame
+        # (annotations are drawn in bright colors on dark background)
+        combined = np.maximum(yolo_frame, face_frame)
 
         # Merge detections
         detections = []
@@ -180,7 +175,7 @@ class AIRunner:
             elif isinstance(item, tuple) and len(item) >= 2:
                 detections.append({"type": "face", "name": item[0], "confidence": round(item[1], 3)})
 
-        return face_frame, detections
+        return combined, detections
 
     def _log_event(self, frame: np.ndarray, detections: list) -> None:
         """Save an event image and log to database."""

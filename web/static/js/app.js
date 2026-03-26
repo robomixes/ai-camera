@@ -14,6 +14,11 @@ function connectSSE() {
         updateMode(data.mode);
     });
 
+    evtSource.addEventListener("alert", (e) => {
+        const data = JSON.parse(e.data);
+        handleAlert(data);
+    });
+
     evtSource.onerror = () => {
         updateStatus(false);
         setTimeout(connectSSE, 3000);
@@ -290,6 +295,56 @@ async function deleteSelected() {
     }
 }
 
+// ===== Bulk Delete =====
+
+async function deleteAllFiltered() {
+    const filterLabel = eventsFilter === "all" ? "ALL" : eventsFilter;
+    const dateInfo = eventsDateFrom || eventsDateTo
+        ? ` from ${eventsDateFrom || "start"} to ${eventsDateTo || "now"}`
+        : "";
+
+    if (!confirm(`Delete all "${filterLabel}" events${dateInfo}? This cannot be undone.`)) return;
+
+    try {
+        const resp = await fetch("/api/events/delete-all", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                event_type: eventsFilter,
+                date_from: eventsDateFrom,
+                date_to: eventsDateTo
+            })
+        });
+        const data = await resp.json();
+        alert(`Deleted ${data.deleted} event(s).`);
+        eventsOffset = 0;
+        loadEventsPage();
+        loadEvents();
+    } catch (e) {
+        console.error("Bulk delete error:", e);
+    }
+}
+
+async function deleteAllEvents() {
+    if (!confirm("DELETE ALL EVENTS? This will remove every detection and face event from the database. This cannot be undone!")) return;
+    if (!confirm("Are you really sure? This deletes EVERYTHING.")) return;
+
+    try {
+        const resp = await fetch("/api/events/delete-all", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ event_type: "all" })
+        });
+        const data = await resp.json();
+        alert(`Deleted ${data.deleted} event(s).`);
+        eventsOffset = 0;
+        loadEventsPage();
+        loadEvents();
+    } catch (e) {
+        console.error("Delete all error:", e);
+    }
+}
+
 // ===== Lightbox =====
 
 function openLightbox(imgUrl, title, subtitle, time) {
@@ -381,6 +436,302 @@ function switchTab(tabName) {
     }
     if (tabName === "faces") {
         loadFaces();
+    }
+    if (tabName === "settings") {
+        loadSettings();
+    }
+}
+
+// ===== Notifications =====
+
+let notifHistory = [];
+let unreadCount = 0;
+
+function loadNotifPrefs() {
+    const prefs = JSON.parse(localStorage.getItem("notifPrefs") || "{}");
+    document.getElementById("notif-browser").checked = prefs.browser || false;
+    document.getElementById("notif-sound").checked = prefs.sound !== false; // default true
+}
+
+function saveNotifPrefs() {
+    const prefs = {
+        browser: document.getElementById("notif-browser").checked,
+        sound: document.getElementById("notif-sound").checked,
+    };
+    localStorage.setItem("notifPrefs", JSON.stringify(prefs));
+
+    // Request browser notification permission if enabled
+    if (prefs.browser && Notification.permission === "default") {
+        Notification.requestPermission();
+    }
+}
+
+function handleAlert(data) {
+    const prefs = JSON.parse(localStorage.getItem("notifPrefs") || "{}");
+    const now = new Date().toLocaleTimeString();
+
+    // Add to history
+    notifHistory.unshift({ ...data, time: now });
+    if (notifHistory.length > 50) notifHistory.pop();
+    unreadCount++;
+    updateNotifBadge();
+    renderNotifList();
+
+    // Show toast
+    showToast(data.title, data.detail);
+
+    // Play sound
+    if (prefs.sound !== false) {
+        try {
+            const audio = document.getElementById("alert-sound");
+            if (audio) {
+                audio.currentTime = 0;
+                audio.play().catch(() => {});
+            }
+        } catch (e) {}
+    }
+
+    // Browser notification
+    if (prefs.browser && Notification.permission === "granted") {
+        try {
+            new Notification(data.title, {
+                body: data.detail,
+                icon: "/api/snapshot",
+                tag: data.type, // replaces previous notification of same type
+            });
+        } catch (e) {}
+    }
+}
+
+function showToast(title, detail) {
+    const container = document.getElementById("toast-container");
+    const toast = document.createElement("div");
+    toast.className = "toast";
+    toast.innerHTML = `<strong>${title}</strong><span>${detail}</span>`;
+    container.appendChild(toast);
+
+    // Auto-remove after 5 seconds
+    setTimeout(() => {
+        toast.classList.add("fade-out");
+        setTimeout(() => toast.remove(), 300);
+    }, 5000);
+
+    // Click to dismiss
+    toast.addEventListener("click", () => {
+        toast.classList.add("fade-out");
+        setTimeout(() => toast.remove(), 300);
+    });
+}
+
+function updateNotifBadge() {
+    const badge = document.getElementById("notif-badge");
+    if (unreadCount > 0) {
+        badge.textContent = unreadCount > 99 ? "99+" : unreadCount;
+        badge.classList.add("visible");
+    } else {
+        badge.classList.remove("visible");
+    }
+}
+
+function renderNotifList() {
+    const list = document.getElementById("notif-list");
+    if (notifHistory.length === 0) {
+        list.innerHTML = '<li class="no-data">No alerts yet</li>';
+        return;
+    }
+    list.innerHTML = notifHistory.map(n => {
+        const typeClass = n.type === "unknown_face" ? "alert-unknown" : n.type === "known_face" ? "alert-known" : "alert-person";
+        return `<li class="notif-item ${typeClass}">
+            <span class="notif-title">${n.title}</span>
+            <span class="notif-detail">${n.detail}</span>
+            <span class="notif-time">${n.time}</span>
+        </li>`;
+    }).join("");
+}
+
+function toggleNotifPanel() {
+    const panel = document.getElementById("notif-panel");
+    panel.classList.toggle("visible");
+    if (panel.classList.contains("visible")) {
+        unreadCount = 0;
+        updateNotifBadge();
+    }
+}
+
+function clearNotifHistory() {
+    notifHistory = [];
+    unreadCount = 0;
+    updateNotifBadge();
+    renderNotifList();
+}
+
+// Close panel on outside click
+document.addEventListener("click", (e) => {
+    const wrap = document.querySelector(".notif-bell-wrap");
+    const panel = document.getElementById("notif-panel");
+    if (wrap && !wrap.contains(e.target) && panel.classList.contains("visible")) {
+        panel.classList.remove("visible");
+    }
+});
+
+// ===== Settings =====
+
+let originalSettings = {};
+
+async function loadSettings() {
+    const container = document.getElementById("settings-container");
+    container.innerHTML = '<div class="no-data">Loading settings...</div>';
+    document.getElementById("settings-status").textContent = "";
+
+    try {
+        const resp = await fetch("/api/settings");
+        const data = await resp.json();
+        originalSettings = {};
+
+        let html = "";
+
+        // Group runtime settings by category
+        const runtimeByCategory = {};
+        for (const [key, info] of Object.entries(data.runtime)) {
+            const cat = info.category || "General";
+            if (!runtimeByCategory[cat]) runtimeByCategory[cat] = [];
+            runtimeByCategory[cat].push({ key, ...info });
+            originalSettings[key] = info.value;
+        }
+
+        // Group readonly settings by category
+        const readonlyByCategory = {};
+        for (const [key, info] of Object.entries(data.readonly)) {
+            const cat = info.category || "General";
+            if (!readonlyByCategory[cat]) readonlyByCategory[cat] = [];
+            readonlyByCategory[cat].push({ key, ...info });
+        }
+
+        // Render runtime settings
+        html += '<h3 class="settings-section-title">Runtime Settings <span class="settings-hint">Changes apply immediately</span></h3>';
+        for (const [cat, settings] of Object.entries(runtimeByCategory)) {
+            html += `<div class="card settings-card">
+                <div class="card-header">${cat}</div>
+                <div class="card-body">`;
+            for (const s of settings) {
+                html += renderSettingRow(s, false);
+            }
+            html += `</div></div>`;
+        }
+
+        // Render readonly settings
+        html += '<h3 class="settings-section-title">Server Settings <span class="settings-hint">Requires restart to change</span></h3>';
+        for (const [cat, settings] of Object.entries(readonlyByCategory)) {
+            html += `<div class="card settings-card">
+                <div class="card-header">${cat}</div>
+                <div class="card-body">`;
+            for (const s of settings) {
+                html += renderSettingRow(s, true);
+            }
+            html += `</div></div>`;
+        }
+
+        container.innerHTML = html;
+    } catch (e) {
+        container.innerHTML = '<div class="no-data">Failed to load settings</div>';
+        console.error("Failed to load settings:", e);
+    }
+}
+
+function renderSettingRow(s, readonly) {
+    const val = s.type === "list" ? (Array.isArray(s.value) ? s.value.join(", ") : s.value) : s.value;
+    const disabledAttr = readonly ? "disabled" : "";
+    const readonlyClass = readonly ? "readonly" : "";
+
+    let inputHtml = "";
+    if (s.type === "bool") {
+        const checked = val ? "checked" : "";
+        inputHtml = `<input type="checkbox" class="setting-input setting-checkbox" data-key="${s.key}" ${checked} ${disabledAttr}>`;
+        return `<div class="setting-row ${readonlyClass}">
+            <div class="setting-label">
+                <span class="setting-key">${s.key}</span>
+                <span class="setting-desc">${s.description || ''}</span>
+            </div>
+            <div class="setting-value">${inputHtml}</div>
+        </div>`;
+    } else if (s.type === "float" || s.type === "int") {
+        const step = s.type === "float" ? "0.1" : "1";
+        const min = s.min !== undefined ? `min="${s.min}"` : "";
+        const max = s.max !== undefined ? `max="${s.max}"` : "";
+        inputHtml = `<input type="number" class="setting-input" data-key="${s.key}" value="${val}" step="${step}" ${min} ${max} ${disabledAttr}>`;
+        if (s.min !== undefined && s.max !== undefined) {
+            inputHtml += `<span class="setting-range">${s.min} – ${s.max}</span>`;
+        }
+    } else if (s.type === "list") {
+        inputHtml = `<input type="text" class="setting-input" data-key="${s.key}" value="${val}" ${disabledAttr} placeholder="comma-separated">`;
+    } else {
+        inputHtml = `<input type="text" class="setting-input" data-key="${s.key}" value="${val || ''}" ${disabledAttr}>`;
+    }
+
+    return `<div class="setting-row ${readonlyClass}">
+        <div class="setting-label">
+            <span class="setting-key">${s.key}</span>
+            <span class="setting-desc">${s.description || ''}</span>
+        </div>
+        <div class="setting-value">${inputHtml}</div>
+    </div>`;
+}
+
+async function saveSettings() {
+    const inputs = document.querySelectorAll(".setting-input:not([disabled])");
+    const changes = {};
+
+    inputs.forEach(input => {
+        const key = input.dataset.key;
+        let val;
+        if (input.type === "checkbox") {
+            val = input.checked;
+            if (val !== originalSettings[key]) {
+                changes[key] = val;
+            }
+        } else {
+            val = input.value;
+            const orig = originalSettings[key];
+            const origStr = Array.isArray(orig) ? orig.join(", ") : String(orig);
+            if (val !== origStr) {
+                changes[key] = val;
+            }
+        }
+    });
+
+    const statusEl = document.getElementById("settings-status");
+
+    if (Object.keys(changes).length === 0) {
+        statusEl.textContent = "No changes to save.";
+        statusEl.className = "settings-status";
+        return;
+    }
+
+    try {
+        const resp = await fetch("/api/settings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(changes)
+        });
+        const data = await resp.json();
+
+        if (data.errors && Object.keys(data.errors).length > 0) {
+            const errMsgs = Object.entries(data.errors).map(([k, v]) => `${k}: ${v}`).join(", ");
+            statusEl.textContent = `Saved with errors: ${errMsgs}`;
+            statusEl.className = "settings-status error";
+        } else {
+            const count = Object.keys(data.updated).length;
+            statusEl.textContent = `${count} setting(s) saved successfully.`;
+            statusEl.className = "settings-status success";
+            // Update originals
+            for (const [k, v] of Object.entries(data.updated)) {
+                originalSettings[k] = v;
+            }
+        }
+    } catch (e) {
+        statusEl.textContent = "Failed to save settings.";
+        statusEl.className = "settings-status error";
+        console.error("Save settings error:", e);
     }
 }
 
@@ -567,6 +918,7 @@ document.addEventListener("DOMContentLoaded", () => {
     connectSSE();
     loadEvents();
     pollStatus();
+    loadNotifPrefs();
 
     setInterval(loadEvents, 10000);
     setInterval(pollStatus, 5000);

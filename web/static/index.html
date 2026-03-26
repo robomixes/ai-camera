@@ -17,8 +17,29 @@
             <button class="tab-btn active" data-tab="live">Live</button>
             <button class="tab-btn" data-tab="events">Events <span id="events-badge" class="tab-badge">0</span></button>
             <button class="tab-btn" data-tab="faces">Faces</button>
+            <button class="tab-btn" data-tab="settings">Settings</button>
         </nav>
         <div class="header-right">
+            <!-- Notification Bell -->
+            <div class="notif-bell-wrap">
+                <button id="notif-bell" class="notif-bell" onclick="toggleNotifPanel()" title="Notifications">
+                    &#128276;
+                    <span id="notif-badge" class="notif-badge">0</span>
+                </button>
+                <div id="notif-panel" class="notif-panel">
+                    <div class="notif-panel-header">
+                        <span>Notifications</span>
+                        <button class="notif-clear" onclick="clearNotifHistory()">Clear</button>
+                    </div>
+                    <div class="notif-panel-settings">
+                        <label><input type="checkbox" id="notif-browser" onchange="saveNotifPrefs()"> Browser notifications</label>
+                        <label><input type="checkbox" id="notif-sound" onchange="saveNotifPrefs()" checked> Sound</label>
+                    </div>
+                    <ul id="notif-list" class="notif-list">
+                        <li class="no-data">No alerts yet</li>
+                    </ul>
+                </div>
+            </div>
             <span id="status-dot" class="status-dot disconnected"></span>
             <span id="status-text">Connecting...</span>
         </div>
@@ -162,6 +183,12 @@
                 </div>
             </div>
 
+            <!-- Bulk Actions Bar -->
+            <div class="bulk-actions-bar">
+                <button class="btn-bulk-delete" onclick="deleteAllFiltered()">Delete All Filtered</button>
+                <button class="btn-bulk-delete danger" onclick="deleteAllEvents()">Delete ALL Events</button>
+            </div>
+
             <!-- Selection Bar -->
             <div id="selection-bar" class="selection-bar">
                 <span><strong id="selected-count">0</strong> selected</span>
@@ -216,6 +243,17 @@
         </div>
     </div>
 
+    <!-- ===== SETTINGS TAB ===== -->
+    <div id="tab-settings" class="tab-content">
+        <div class="settings-page">
+            <div id="settings-container"></div>
+            <div class="settings-actions">
+                <button class="btn-save-settings" onclick="saveSettings()">Save Changes</button>
+                <span id="settings-status" class="settings-status"></span>
+            </div>
+        </div>
+    </div>
+
     <!-- ===== Image Lightbox ===== -->
     <div id="lightbox" class="lightbox" onclick="closeLightbox(event)">
         <div class="lightbox-content">
@@ -224,6 +262,12 @@
             <div id="lightbox-info" class="lightbox-info"></div>
         </div>
     </div>
+
+    <!-- Toast Container -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Alert Sound (short beep as base64) -->
+    <audio id="alert-sound" preload="auto" src="data:audio/wav;base64,UklGRl4FAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YToFAAAAAAEAAgADAAQABQAHAAgACgAMAA4AEAASABUAGAAbAB4AIQAlACkALQAxADYAOwBAAEUASwBRAFcAXgBlAGwAdAB8AIQAjACVAJ4ApwCxALsAxQDPANoA5QDwAPwBCAEUASEBLgE7AUkBVwFlAXQBgwGSAaIBsgHCANIA4wD0AQUBFgEnATkBSwFdAW8BggGUAacBugHNAeEB9AIIAhwCMAJEAlkCbgKDApgCrgLEAtoC8AMGAxwDMwNKA2EDegOSA6sDxAPdA/cDEAMqA0QDXQN3A5IDrQPIA+MD/gQZBDUEUARsBIkEpQTCBN8E/AQaBDgEVgR0BJIE0ATPBO4FDAU7BWoFmQXJBfkGKQZaBowGvgbwByMHVgeJB70H8QgmCFsIkQjHCP0JMwlqCaEJ2QoRCkkKggq7CvQLLgtpC6QL3wwbDFcMlAzRDQ4NTA2KDckOCA5IDogOyQ8KD0wPjg/QEBMQVhCZENwRIBFkEakR7hIzEnkSvxMGE00TlBPcFCQUbBS1FP4VSRWSE9wUJhRwFLsVBhVRFZ0V6RY1FoIWzxcdF2sXuRgIGFcYpxj3GUcZmBnpGjsajRrfGzIbhRvYHCwcgBzUHSkdfR3SHice/B9SH6gf/iBVIKwgAyFaIbIiCiJiIrsi"></audio>
 
     <script src="/static/js/app.js"></script>
 </body>

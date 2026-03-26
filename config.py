@@ -1,6 +1,37 @@
 # config.py
 
 import os
+import json
+
+# --- Runtime Overrides (persisted across restarts) ---
+_OVERRIDES_FILE = "config_overrides.json"
+
+def _load_overrides():
+    """Load saved runtime settings from JSON file."""
+    if os.path.exists(_OVERRIDES_FILE):
+        try:
+            with open(_OVERRIDES_FILE, 'r') as f:
+                overrides = json.load(f)
+            for key, value in overrides.items():
+                globals()[key] = value
+            print(f"Loaded {len(overrides)} setting override(s) from {_OVERRIDES_FILE}")
+        except Exception as e:
+            print(f"Warning: Could not load overrides: {e}")
+
+def save_overrides(settings: dict):
+    """Save runtime settings to JSON file for persistence."""
+    # Read existing overrides and merge
+    existing = {}
+    if os.path.exists(_OVERRIDES_FILE):
+        try:
+            with open(_OVERRIDES_FILE, 'r') as f:
+                existing = json.load(f)
+        except Exception:
+            pass
+    existing.update(settings)
+    with open(_OVERRIDES_FILE, 'w') as f:
+        json.dump(existing, f, indent=2)
+    print(f"Saved {len(settings)} setting(s) to {_OVERRIDES_FILE}")
 
 # --- Camera Identity & Location ---
 CAMERA_ID = "CAM_001"
@@ -62,3 +93,10 @@ WEB_PORT = 8080
 STREAM_JPEG_QUALITY = 70
 STREAM_MAX_WIDTH = 960
 STREAM_TARGET_FPS = 10
+
+# --- Alerts ---
+ALERT_ENABLED = True
+ALERT_EVENTS = ["unknown_face", "person_detected"]  # available: unknown_face, person_detected, known_face
+
+# --- Load any persisted runtime overrides (must be last) ---
+_load_overrides()

@@ -184,11 +184,55 @@ def get_event_count(event_type: str = "all", date_from: str = "", date_to: str =
     return total
 
 
+def delete_all_events(event_type: str = "all", date_from: str = "", date_to: str = "") -> int:
+    """Delete events in bulk, optionally filtered by type and date range. Also removes image files."""
+    deleted = 0
+    date_where, date_params = _build_date_clause(date_from, date_to)
+    try:
+        conn = sqlite3.connect(config.DB_NAME)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        if event_type in ("all", "detection"):
+            # Get image paths before deleting
+            cursor.execute(f"SELECT image_path FROM detections WHERE 1=1{date_where}", date_params)
+            for row in cursor.fetchall():
+                _delete_image_file(row["image_path"], config.ROI_OUTPUT_DIR)
+            cursor.execute(f"DELETE FROM detections WHERE 1=1{date_where}", date_params)
+            deleted += cursor.rowcount
+
+        if event_type in ("all", "face"):
+            cursor.execute(f"SELECT image_path FROM face_events WHERE 1=1{date_where}", date_params)
+            for row in cursor.fetchall():
+                _delete_image_file(row["image_path"], config.EVENT_IMAGE_DIR)
+            cursor.execute(f"DELETE FROM face_events WHERE 1=1{date_where}", date_params)
+            deleted += cursor.rowcount
+
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"Error bulk deleting events: {e}")
+    return deleted
+
+
+def _delete_image_file(image_path, base_dir):
+    """Safely delete an event image file."""
+    if not image_path:
+        return
+    try:
+        full_path = os.path.join(base_dir, image_path)
+        if os.path.exists(full_path):
+            os.remove(full_path)
+    except Exception:
+        pass
+
+
 def delete_events(ids: list) -> int:
-    """Delete events by their composite ids (type_id format, e.g. 'detection_5', 'face_12')."""
+    """Delete events by their composite ids (type_id format, e.g. 'detection_5', 'face_12'). Also removes image files."""
     deleted = 0
     try:
         conn = sqlite3.connect(config.DB_NAME)
+        conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
         det_ids = []
@@ -203,11 +247,17 @@ def delete_events(ids: list) -> int:
 
         if det_ids:
             placeholders = ",".join("?" * len(det_ids))
+            cursor.execute(f"SELECT image_path FROM detections WHERE id IN ({placeholders})", det_ids)
+            for row in cursor.fetchall():
+                _delete_image_file(row["image_path"], config.ROI_OUTPUT_DIR)
             cursor.execute(f"DELETE FROM detections WHERE id IN ({placeholders})", det_ids)
             deleted += cursor.rowcount
 
         if face_ids:
             placeholders = ",".join("?" * len(face_ids))
+            cursor.execute(f"SELECT image_path FROM face_events WHERE id IN ({placeholders})", face_ids)
+            for row in cursor.fetchall():
+                _delete_image_file(row["image_path"], config.EVENT_IMAGE_DIR)
             cursor.execute(f"DELETE FROM face_events WHERE id IN ({placeholders})", face_ids)
             deleted += cursor.rowcount
 

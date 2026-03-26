@@ -104,12 +104,14 @@ def create_app() -> FastAPI:
 
     async def _detection_generator(request: Request):
         prev_detections = None
+        last_alert_time = 0
+        alert_cooldown = 5.0  # seconds between alerts to avoid spam
+
         while True:
             if await request.is_disconnected():
                 break
             if _ai_runner:
                 _, detections = _ai_runner.get_latest()
-                # Only send when detections change
                 det_str = json.dumps(detections)
                 if det_str != prev_detections:
                     prev_detections = det_str
@@ -121,7 +123,61 @@ def create_app() -> FastAPI:
                             "mode": _ai_runner.mode,
                         })
                     }
+
+                    # Check for alerts
+                    now = time.time()
+                    if getattr(config, "ALERT_ENABLED", False) and detections and (now - last_alert_time >= alert_cooldown):
+                        alerts = _check_alerts(detections, _ai_runner.mode)
+                        if alerts:
+                            last_alert_time = now
+                            for alert in alerts:
+                                yield {
+                                    "event": "alert",
+                                    "data": json.dumps(alert)
+                                }
+
             await asyncio.sleep(0.3)
+
+    def _check_alerts(detections: list, mode: str) -> list:
+        """Check detections against configured alert rules."""
+        alert_events = getattr(config, "ALERT_EVENTS", [])
+        alerts = []
+
+        for det in detections:
+            # Person detected (YOLO)
+            if "person_detected" in alert_events:
+                label = det.get("label", "")
+                if label == "person":
+                    alerts.append({
+                        "type": "person_detected",
+                        "title": "Person Detected",
+                        "detail": f"person ({det.get('confidence', 0):.0%} confidence)",
+                    })
+                    break  # one alert per type per cycle
+
+            # Unknown face
+            if "unknown_face" in alert_events:
+                name = det.get("name", "")
+                if name == "Unknown":
+                    alerts.append({
+                        "type": "unknown_face",
+                        "title": "Unknown Face",
+                        "detail": "Unrecognized face detected",
+                    })
+                    break
+
+            # Known face
+            if "known_face" in alert_events:
+                name = det.get("name", "")
+                if name and name not in ("Unknown", "No Database", ""):
+                    alerts.append({
+                        "type": "known_face",
+                        "title": f"{name} Detected",
+                        "detail": f"Known person: {name}",
+                    })
+                    break
+
+        return alerts
 
     # --- REST API ---
     @app.get("/api/status")
@@ -165,6 +221,15 @@ def create_app() -> FastAPI:
         deleted = db_handler.delete_events(ids)
         return {"deleted": deleted}
 
+    @app.post("/api/events/delete-all")
+    async def delete_all_events(request: Request):
+        body = await request.json()
+        event_type = body.get("event_type", "all")
+        date_from = body.get("date_from", "")
+        date_to = body.get("date_to", "")
+        deleted = db_handler.delete_all_events(event_type=event_type, date_from=date_from, date_to=date_to)
+        return {"deleted": deleted}
+
     @app.post("/api/ai/mode")
     async def set_ai_mode(request: Request):
         body = await request.json()
@@ -177,6 +242,95 @@ def create_app() -> FastAPI:
             else:
                 _ai_runner.mode = mode
         return {"mode": mode}
+
+    # --- Settings API ---
+    SETTINGS_SCHEMA = {
+        "LOG_DELAY_SECONDS": {"type": "float", "min": 0.5, "max": 60, "description": "Seconds between event logs", "category": "Detection"},
+        "DETECTION_CLASSES": {"type": "list", "description": "Object classes to detect (comma-separated)", "category": "Detection"},
+        "RECOGNITION_THRESHOLD": {"type": "float", "min": 0.1, "max": 2.0, "description": "Distance below which a face is 'known'", "category": "Face Recognition"},
+        "REJECTION_DISTANCE": {"type": "float", "min": 0.5, "max": 3.0, "description": "Distance above which detection is rejected", "category": "Face Recognition"},
+        "STREAM_JPEG_QUALITY": {"type": "int", "min": 10, "max": 100, "description": "JPEG quality for web stream", "category": "Stream"},
+        "STREAM_MAX_WIDTH": {"type": "int", "min": 320, "max": 1920, "description": "Max width of streamed frames", "category": "Stream"},
+        "STREAM_TARGET_FPS": {"type": "int", "min": 1, "max": 30, "description": "Target FPS for web stream", "category": "Stream"},
+        "ALERT_ENABLED": {"type": "bool", "description": "Enable/disable alert notifications", "category": "Alerts"},
+        "ALERT_EVENTS": {"type": "list", "description": "Alert types: unknown_face, person_detected, known_face", "category": "Alerts"},
+    }
+
+    READONLY_SETTINGS = {
+        "CAMERA_ID": {"type": "string", "description": "Camera identifier", "category": "Camera"},
+        "CAMERA_DESCRIPTION": {"type": "string", "description": "Camera description", "category": "Camera"},
+        "CAMERA_TYPE": {"type": "string", "description": "Camera backend type", "category": "Camera"},
+        "RTSP_URL": {"type": "string", "description": "RTSP stream URL", "category": "Camera"},
+        "FRAME_WIDTH": {"type": "int", "description": "Camera frame width", "category": "Camera"},
+        "FRAME_HEIGHT": {"type": "int", "description": "Camera frame height", "category": "Camera"},
+        "WEB_HOST": {"type": "string", "description": "Web server host", "category": "Server"},
+        "WEB_PORT": {"type": "int", "description": "Web server port", "category": "Server"},
+        "FACENET_MODEL_PATH": {"type": "string", "description": "FaceNet model file", "category": "Face Recognition"},
+        "DB_NAME": {"type": "string", "description": "Database filename", "category": "Storage"},
+    }
+
+    @app.get("/api/settings")
+    async def get_settings():
+        runtime = {}
+        for key, schema in SETTINGS_SCHEMA.items():
+            val = getattr(config, key, None)
+            runtime[key] = {**schema, "value": val}
+
+        readonly = {}
+        for key, schema in READONLY_SETTINGS.items():
+            val = getattr(config, key, None)
+            readonly[key] = {**schema, "value": val}
+
+        return {"runtime": runtime, "readonly": readonly}
+
+    @app.post("/api/settings")
+    async def update_settings(request: Request):
+        body = await request.json()
+        updated = {}
+        errors = {}
+
+        for key, value in body.items():
+            if key not in SETTINGS_SCHEMA:
+                errors[key] = "Not a runtime-changeable setting"
+                continue
+
+            schema = SETTINGS_SCHEMA[key]
+            try:
+                # Type conversion
+                if schema["type"] == "float":
+                    value = float(value)
+                elif schema["type"] == "int":
+                    value = int(value)
+                elif schema["type"] == "bool":
+                    if isinstance(value, str):
+                        value = value.lower() in ("true", "1", "yes")
+                    else:
+                        value = bool(value)
+                elif schema["type"] == "list":
+                    if isinstance(value, str):
+                        value = [v.strip() for v in value.split(",") if v.strip()]
+
+                # Range validation
+                if "min" in schema and value < schema["min"]:
+                    errors[key] = f"Must be >= {schema['min']}"
+                    continue
+                if "max" in schema and value > schema["max"]:
+                    errors[key] = f"Must be <= {schema['max']}"
+                    continue
+
+                setattr(config, key, value)
+                updated[key] = value
+
+            except (ValueError, TypeError) as e:
+                errors[key] = f"Invalid value: {e}"
+
+        # Persist changes to disk
+        if updated:
+            config.save_overrides(updated)
+
+        if errors:
+            return JSONResponse({"updated": updated, "errors": errors}, status_code=207)
+        return {"updated": updated}
 
     # --- Face Enrollment API ---
     faces_dir = Path(config.FACE_IMAGE_BASE_DIR)
