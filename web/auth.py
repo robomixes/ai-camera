@@ -1,28 +1,45 @@
-"""Simple authentication module with hashed passwords."""
-import hashlib
+"""Authentication module with bcrypt hashing, rate limiting, and password migration."""
 import json
 import os
 import secrets
-from pathlib import Path
+import time
+
+import bcrypt
 
 AUTH_FILE = "auth.json"
 
-
-def _hash_password(password: str, salt: str = "") -> str:
-    """Hash a password with SHA-256 + salt."""
-    if not salt:
-        salt = secrets.token_hex(16)
-    hashed = hashlib.sha256((salt + password).encode()).hexdigest()
-    return f"{salt}:{hashed}"
+# --- Rate limiting ---
+_login_attempts: dict[str, list[float]] = {}  # ip -> [timestamps]
+MAX_ATTEMPTS = 5
+COOLDOWN_SECONDS = 60
 
 
-def _verify_password(password: str, stored: str) -> bool:
-    """Verify a password against a stored hash."""
-    if ":" not in stored:
+def _hash_password(password: str) -> str:
+    """Hash a password with bcrypt."""
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+
+def _verify_bcrypt(password: str, stored: str) -> bool:
+    """Verify a password against a bcrypt hash."""
+    try:
+        return bcrypt.checkpw(password.encode(), stored.encode())
+    except Exception:
+        return False
+
+
+def _verify_legacy_sha256(password: str, stored: str) -> bool:
+    """Verify against old SHA-256 format (salt:hash) for migration."""
+    import hashlib
+    if ":" not in stored or stored.startswith("$2"):
         return False
     salt, hashed = stored.split(":", 1)
     check = hashlib.sha256((salt + password).encode()).hexdigest()
     return check == hashed
+
+
+def _is_bcrypt_hash(stored: str) -> bool:
+    """Check if a stored hash is bcrypt format."""
+    return stored.startswith("$2")
 
 
 def _load_auth() -> dict:
@@ -58,14 +75,57 @@ def initialize_auth() -> None:
         print(f"Auth: Loaded {len(auth['users'])} user(s)")
 
 
+def check_rate_limit(ip: str) -> tuple[bool, int]:
+    """Check if an IP is rate limited. Returns (allowed, seconds_remaining)."""
+    now = time.time()
+    attempts = _login_attempts.get(ip, [])
+    # Remove old attempts outside the cooldown window
+    attempts = [t for t in attempts if now - t < COOLDOWN_SECONDS]
+    _login_attempts[ip] = attempts
+
+    if len(attempts) >= MAX_ATTEMPTS:
+        oldest = attempts[0]
+        remaining = int(COOLDOWN_SECONDS - (now - oldest))
+        return False, max(remaining, 1)
+
+    return True, 0
+
+
+def record_failed_attempt(ip: str) -> None:
+    """Record a failed login attempt for an IP."""
+    if ip not in _login_attempts:
+        _login_attempts[ip] = []
+    _login_attempts[ip].append(time.time())
+
+
+def clear_attempts(ip: str) -> None:
+    """Clear failed attempts for an IP after successful login."""
+    _login_attempts.pop(ip, None)
+
+
 def verify_login(username: str, password: str) -> bool:
-    """Check username/password against stored credentials."""
+    """Check username/password. Auto-migrates SHA-256 to bcrypt."""
     auth = _load_auth()
     users = auth.get("users", {})
     user = users.get(username)
     if not user:
         return False
-    return _verify_password(password, user["password"])
+
+    stored = user["password"]
+
+    # Try bcrypt first
+    if _is_bcrypt_hash(stored):
+        return _verify_bcrypt(password, stored)
+
+    # Try legacy SHA-256 and migrate if valid
+    if _verify_legacy_sha256(password, stored):
+        # Migrate to bcrypt
+        user["password"] = _hash_password(password)
+        _save_auth(auth)
+        print(f"Auth: Migrated '{username}' password from SHA-256 to bcrypt")
+        return True
+
+    return False
 
 
 def change_password(username: str, old_password: str, new_password: str) -> tuple[bool, str]:
@@ -80,7 +140,15 @@ def change_password(username: str, old_password: str, new_password: str) -> tupl
     if not user:
         return False, "User not found"
 
-    if not _verify_password(old_password, user["password"]):
+    # Verify old password (supports both formats)
+    stored = user["password"]
+    valid = False
+    if _is_bcrypt_hash(stored):
+        valid = _verify_bcrypt(old_password, stored)
+    else:
+        valid = _verify_legacy_sha256(old_password, stored)
+
+    if not valid:
         return False, "Current password is incorrect"
 
     user["password"] = _hash_password(new_password)
@@ -93,7 +161,7 @@ def generate_session_token() -> str:
     return secrets.token_hex(32)
 
 
-# Session store (in-memory, simple)
+# Session store (in-memory)
 _sessions: dict[str, str] = {}  # token -> username
 
 

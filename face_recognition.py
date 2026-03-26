@@ -6,7 +6,11 @@ import json
 import os
 import sys
 import datetime
-import time # Import 'time' for time.time() calls
+import threading
+import time
+
+# Thread lock for TFLite interpreter (not thread-safe)
+_inference_lock = threading.Lock()
 try:
     from tensorflow.lite.python.interpreter import Interpreter
 except ImportError:
@@ -102,19 +106,20 @@ def normalize_face(face_image):
     return np.expand_dims(face_norm, axis=0)
 
 def get_face_embedding(face_image):
-    """Runs the FaceNet model to get a 128-dim embedding."""
+    """Runs the FaceNet model to get a 128-dim embedding. Thread-safe."""
     global FACENET_INTERPRETER
     if FACENET_INTERPRETER is None: return None
-        
+
     normalized_input = normalize_face(face_image)
 
-    input_details = FACENET_INTERPRETER.get_input_details()
-    output_details = FACENET_INTERPRETER.get_output_details()
+    with _inference_lock:
+        input_details = FACENET_INTERPRETER.get_input_details()
+        output_details = FACENET_INTERPRETER.get_output_details()
 
-    FACENET_INTERPRETER.set_tensor(input_details[0]['index'], normalized_input)
-    FACENET_INTERPRETER.invoke()
+        FACENET_INTERPRETER.set_tensor(input_details[0]['index'], normalized_input)
+        FACENET_INTERPRETER.invoke()
 
-    embedding = FACENET_INTERPRETER.get_tensor(output_details[0]['index'])[0]
+        embedding = FACENET_INTERPRETER.get_tensor(output_details[0]['index'])[0].copy()
     return embedding
 
 def calculate_distance(emb1, emb2):

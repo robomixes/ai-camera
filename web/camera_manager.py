@@ -117,10 +117,11 @@ class CameraManager:
         for cam_id, inst in self._instances.items():
             runner = inst.runner
             cam = inst.cam
+            has_signal = cam is not None and cam.is_running() and cam.get_frame() is not None
             result.append({
                 "id": cam_id,
                 "description": inst.description,
-                "connected": cam.is_running() if cam else False,
+                "connected": has_signal,
                 "frame_size": list(cam.frame_size) if cam else None,
                 "ai_mode": runner.mode if runner else None,
                 "ai_fps": round(runner.fps, 1) if runner else 0,

@@ -57,6 +57,8 @@ function switchCamera(cameraId) {
             }
         }, 5000);
     }
+    // Immediately update status for the new camera
+    pollStatus();
     // Reload events and dashboard for new camera
     loadEvents();
     const homeTab = document.getElementById("tab-home");
@@ -1390,15 +1392,20 @@ async function setMode(mode) {
 
 async function pollStatus() {
     try {
-        const resp = await fetch("/api/status");
+        const camParam = _camParam();
+        const resp = await fetch(`/api/status${camParam ? '?' + camParam : ''}`);
         const data = await resp.json();
         updateStatus(data.camera_connected);
-        if (data.ai_fps) updateFPS(data.ai_fps);
+        if (data.ai_fps !== undefined) updateFPS(data.ai_fps);
         if (data.ai_mode) updateMode(data.ai_mode);
 
         const info = document.getElementById("camera-info");
-        if (info && data.frame_size) {
-            info.textContent = `${data.frame_size[0]}x${data.frame_size[1]} | ${data.camera_type.toUpperCase()}`;
+        if (info) {
+            if (data.frame_size) {
+                info.textContent = `${data.frame_size[0]}x${data.frame_size[1]} | ${data.camera_type.toUpperCase()}`;
+            } else {
+                info.textContent = "No Signal";
+            }
         }
         document.getElementById("stat-resolution").textContent =
             data.frame_size ? `${data.frame_size[0]}x${data.frame_size[1]}` : "-";

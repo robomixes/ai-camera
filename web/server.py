@@ -19,11 +19,39 @@ import face_recognition as face_rec
 from camera import create_camera
 from camera.base import CameraBase
 from web.ai_runner import AIRunner
-from web.auth import initialize_auth, verify_login, change_password, create_session, get_session_user, delete_session
+from web.auth import (initialize_auth, verify_login, change_password, create_session,
+                       get_session_user, delete_session, check_rate_limit, record_failed_attempt, clear_attempts)
 from web.camera_manager import CameraManager
 from web.utils import encode_jpeg, resize_frame
 
 _faces_lock = threading.Lock()
+
+
+def _mask_url(url: str) -> str:
+    """Mask password in RTSP URL. rtsp://admin:pass@host -> rtsp://admin:****@host"""
+    if not url or "@" not in url:
+        return url
+    try:
+        prefix, rest = url.split("@", 1)
+        # Find the last : before @ which separates user:pass
+        if ":" in prefix:
+            scheme_user = prefix.rsplit(":", 1)[0]
+            return f"{scheme_user}:****@{rest}"
+    except Exception:
+        pass
+    return url
+
+
+def _mask_sensitive(data: dict) -> dict:
+    """Mask sensitive values in a dict for API responses."""
+    masked = dict(data)
+    if "url" in masked and masked["url"]:
+        masked["url"] = _mask_url(masked["url"])
+    if "value" in masked and isinstance(masked.get("description", ""), str):
+        if "url" in masked.get("description", "").lower() or "rtsp" in str(masked.get("value", "")).lower():
+            if isinstance(masked["value"], str) and "@" in masked["value"]:
+                masked["value"] = _mask_url(masked["value"])
+    return masked
 
 # --- Globals set during lifespan ---
 _manager: CameraManager | None = None
@@ -95,15 +123,28 @@ def create_app() -> FastAPI:
 
     @app.post("/api/login")
     async def api_login(request: Request):
+        client_ip = request.client.host if request.client else "unknown"
+
+        # Rate limit check
+        allowed, wait_seconds = check_rate_limit(client_ip)
+        if not allowed:
+            return JSONResponse(
+                {"error": f"Too many login attempts. Try again in {wait_seconds}s."},
+                status_code=429
+            )
+
         body = await request.json()
         username = body.get("username", "")
         password = body.get("password", "")
 
         if verify_login(username, password):
+            clear_attempts(client_ip)
             token = create_session(username)
             response = JSONResponse({"success": True, "username": username})
             response.set_cookie("session", token, httponly=True, samesite="lax", max_age=86400)
             return response
+
+        record_failed_attempt(client_ip)
         return JSONResponse({"error": "Invalid username or password"}, status_code=401)
 
     @app.post("/api/logout")
@@ -203,10 +244,15 @@ def create_app() -> FastAPI:
     async def status(camera_id: str = ""):
         cam = _get_cam(camera_id)
         runner = _get_runner(camera_id)
+        # Check if camera actually has frames (not just thread running)
+        has_signal = False
+        if cam and cam.is_running():
+            frame = cam.get_frame()
+            has_signal = frame is not None
         return {
-            "camera_connected": cam.is_running() if cam else False,
+            "camera_connected": has_signal,
             "camera_type": config.CAMERA_TYPE,
-            "frame_size": list(cam.frame_size) if cam else None,
+            "frame_size": list(cam.frame_size) if cam and has_signal else None,
             "ai_mode": runner.mode if runner else None,
             "ai_fps": round(runner.fps, 1) if runner else 0,
             "cameras": _manager.list_cameras() if _manager else [],
@@ -234,7 +280,7 @@ def create_app() -> FastAPI:
                 "latitude": getattr(config, "GPS_LATITUDE", 0),
                 "longitude": getattr(config, "GPS_LONGITUDE", 0),
             }]
-        return {"cameras": cameras}
+        return {"cameras": [_mask_sensitive(c) for c in cameras]}
 
     @app.post("/api/cameras/config")
     async def save_cameras_config(request: Request):
@@ -242,10 +288,36 @@ def create_app() -> FastAPI:
         body = await request.json()
         cameras = body.get("cameras", [])
 
-        # Validate
+        # Build lookup of existing cameras to preserve masked passwords
+        # Read directly from overrides file to get the real (unmasked) URLs
+        existing = {}
+        try:
+            if os.path.exists("config_overrides.json"):
+                with open("config_overrides.json", 'r') as f:
+                    saved = json.load(f)
+                for c in saved.get("CAMERAS", []):
+                    existing[c.get("id", "")] = c
+                if not existing and saved.get("RTSP_URL"):
+                    existing[saved.get("CAMERA_ID", config.CAMERA_ID)] = {"url": saved["RTSP_URL"]}
+        except Exception:
+            pass
+        # Fallback to runtime config
+        if not existing:
+            for c in (config.CAMERAS or []):
+                existing[c.get("id", "")] = c
+        if not existing:
+            existing[config.CAMERA_ID] = {"url": config.RTSP_URL}
+
+        # Validate and restore masked passwords
         for i, cam in enumerate(cameras):
             if not cam.get("id"):
                 return JSONResponse({"error": f"Camera {i+1} missing 'id'"}, status_code=400)
+
+            # If URL contains masked password, restore from existing config
+            url = cam.get("url", "")
+            if "****" in url and cam["id"] in existing:
+                cam["url"] = existing[cam["id"]].get("url", url)
+
             if not cam.get("url") and cam.get("type") == "rtsp":
                 return JSONResponse({"error": f"Camera '{cam['id']}' missing 'url'"}, status_code=400)
 
@@ -402,7 +474,11 @@ def create_app() -> FastAPI:
         readonly = {}
         for key, schema in READONLY_SETTINGS.items():
             val = getattr(config, key, None)
-            readonly[key] = {**schema, "value": val}
+            entry = {**schema, "value": val}
+            # Mask sensitive URLs
+            if key == "RTSP_URL" and isinstance(val, str):
+                entry["value"] = _mask_url(val)
+            readonly[key] = entry
 
         return {"runtime": runtime, "readonly": readonly}
 
