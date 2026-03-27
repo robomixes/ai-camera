@@ -47,8 +47,15 @@ def run_yolov8_detection(frame, frame_size, roi=None, classes_filter=None):
     
     # List to store tuples of (label, confidence) for objects outside the ROI
     filtered_detected_data = []
-    
+
     annotated_frame = frame.copy()
+
+    # Scale text/line thickness based on frame width
+    h_frame, w_frame = frame.shape[:2]
+    scale = max(w_frame / 640, 0.5)  # normalize to 640px baseline
+    font_scale = 0.4 * scale
+    thickness = max(1, int(1 * scale))
+    circle_r = max(3, int(4 * scale))
 
     # Define colors for drawing
     FILTERED_COLOR = (0, 255, 0) # Green for unfiltered (tracked)
@@ -67,37 +74,33 @@ def run_yolov8_detection(frame, frame_size, roi=None, classes_filter=None):
 
             
             # --- ROI CHECK (Only applies if roi is provided) ---
+            line_h = int(18 * scale)  # line height for stacked text
+
             if roi is not None and is_inside_roi(center_x, center_y, roi):
-                # Object is inside the ROI (to be deselected/ignored)
                 color = IGNORED_COLOR
-                cv2.circle(annotated_frame, (center_x, center_y), 5, color, -1)
-                cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, 2)
-                cv2.putText(annotated_frame, f"IGNORED", (x1, y1 - 10), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                cv2.circle(annotated_frame, (center_x, center_y), circle_r, color, -1)
+                cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, thickness)
+                cv2.putText(annotated_frame, "IGNORED", (x1, y1 - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness)
             else:
-                # Object is outside the ROI OR roi is None
                 color = FILTERED_COLOR
-                filtered_detected_data.append((label, conf)) # <--- CAPTURE CONFIDENCE
-                cv2.circle(annotated_frame, (center_x, center_y), 5, color, -1)
-                cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, 2)
-                cv2.putText(annotated_frame, f"{label} {conf:.2f}", (x1, y1 - 10), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                filtered_detected_data.append((label, conf))
+                cv2.circle(annotated_frame, (center_x, center_y), circle_r, color, -1)
+                cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, thickness)
+                cv2.putText(annotated_frame, label, (x1, y1 - line_h - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness)
+                cv2.putText(annotated_frame, f"{conf:.0%}", (x1, y1 - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness)
 
         break
 
     # Draw the ROI boundary only if it was passed (i.e., filtered mode)
     if roi is not None:
         roi_x, roi_y, roi_w, roi_h = roi
-        cv2.rectangle(annotated_frame, (roi_x, roi_y), (roi_x + roi_w, roi_y + roi_h), (255, 255, 0), 3)
-        cv2.putText(annotated_frame, "ROI (IGNORED)", (roi_x + 5, roi_y + 25), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
+        cv2.rectangle(annotated_frame, (roi_x, roi_y), (roi_x + roi_w, roi_y + roi_h), (255, 255, 0), thickness + 1)
+        cv2.putText(annotated_frame, "ROI (IGNORED)", (roi_x + 5, roi_y + int(20 * scale)),
+                    cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 0), thickness)
 
-    # Display the count of unique detected objects
-    # Note: Using labels only for the display string
-    unique_objects = set([label for label, conf in filtered_detected_data])
-    info_text = f"ACTIVE: {', '.join(unique_objects) if unique_objects else 'None'}"
-    
-    cv2.putText(annotated_frame, info_text, (10, frame_size[1] - 10), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+    # Info text removed — dashboard sidebar shows detections
     
     return annotated_frame, filtered_detected_data # <--- RETURN LIST OF TUPLES

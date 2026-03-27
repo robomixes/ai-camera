@@ -372,7 +372,13 @@ def run_facenet_recognition(frame, picam2_frame_size):
     Runs multi-frame face detection, recognition, and fills the LOGGING_BUFFER.
     """
     annotated_frame = frame.copy()
-    
+
+    # Scale text/line thickness based on frame width
+    h_frame, w_frame = frame.shape[:2]
+    _scale = max(w_frame / 640, 0.5)
+    _font_scale = 0.4 * _scale
+    _thickness = max(1, int(1 * _scale))
+
     # ------------------------------------------------------------------
     # STEP 1: FACE DETECTION & EMBEDDING CALCULATION
     # ------------------------------------------------------------------
@@ -461,12 +467,13 @@ def run_facenet_recognition(frame, picam2_frame_size):
         # --- LOGGING BUFFER FILLING (Only if KNOWN) ---
         # ------------------------------------------------------------------
         # --- DRAWING ---
-        cv2.rectangle(annotated_frame, (x, y), (x + w, y + h), color, 2)
+        _line_h = int(18 * _scale)
+        cv2.rectangle(annotated_frame, (x, y), (x + w, y + h), color, _thickness)
 
-        # Display the Track ID and the recognition result
-        label = f"T{t_id}: {display_name} ({distance:.2f})"
-        cv2.putText(annotated_frame, label, (x, y - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+        cv2.putText(annotated_frame, display_name, (x, y - _line_h - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, _font_scale, color, _thickness)
+        cv2.putText(annotated_frame, f"{distance:.2f}", (x, y - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, _font_scale, color, _thickness)
 
         # --- LOGGING BUFFER FILLING (Only if KNOWN, saved AFTER drawing) ---
         if is_known_person:
@@ -490,8 +497,6 @@ def run_facenet_recognition(frame, picam2_frame_size):
 
         detected_faces.append((display_name, 1.0 - distance))
 
-    info_text = f"Tracks: {len(TRACKED_FACES)} | Detections: {len(raw_face_boxes)} | Valid: {len(detected_faces)}"
-    cv2.putText(annotated_frame, info_text, (10, picam2_frame_size[1] - 10), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+    # Info text removed — dashboard sidebar shows detections
     
     return annotated_frame, detected_faces

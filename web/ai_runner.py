@@ -32,7 +32,7 @@ class AIRunner:
         self._stale_timeout = 5.0  # seconds without seeing a detection before it's "gone"
 
     def start(self) -> None:
-        if self._mode == "facenet":
+        if self._mode in ("facenet", "both"):
             if not face_rec.initialize_system():
                 print("Warning: FaceNet initialization failed. Falling back to YOLO.")
                 self._mode = "yolo"

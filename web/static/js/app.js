@@ -398,8 +398,9 @@ async function deleteAllFiltered() {
     const dateInfo = eventsDateFrom || eventsDateTo
         ? ` from ${eventsDateFrom || "start"} to ${eventsDateTo || "now"}`
         : "";
+    const camInfo = eventsCameraFilter ? ` for camera ${eventsCameraFilter}` : "";
 
-    if (!confirm(`Delete all "${filterLabel}" events${dateInfo}? This cannot be undone.`)) return;
+    if (!confirm(`Delete all "${filterLabel}" events${dateInfo}${camInfo}? This cannot be undone.`)) return;
 
     try {
         const resp = await fetch("/api/events/delete-all", {
@@ -408,7 +409,8 @@ async function deleteAllFiltered() {
             body: JSON.stringify({
                 event_type: eventsFilter,
                 date_from: eventsDateFrom,
-                date_to: eventsDateTo
+                date_to: eventsDateTo,
+                camera_id: eventsCameraFilter
             })
         });
         const data = await resp.json();
@@ -422,14 +424,15 @@ async function deleteAllFiltered() {
 }
 
 async function deleteAllEvents() {
-    if (!confirm("DELETE ALL EVENTS? This will remove every detection and face event from the database. This cannot be undone!")) return;
-    if (!confirm("Are you really sure? This deletes EVERYTHING.")) return;
+    const camInfo = eventsCameraFilter ? ` for camera ${eventsCameraFilter}` : " from ALL cameras";
+    if (!confirm(`DELETE ALL EVENTS${camInfo}? This will remove every detection and face event. This cannot be undone!`)) return;
+    if (!confirm("Are you really sure?")) return;
 
     try {
         const resp = await fetch("/api/events/delete-all", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ event_type: "all" })
+            body: JSON.stringify({ event_type: "all", camera_id: eventsCameraFilter })
         });
         const data = await resp.json();
         alert(`Deleted ${data.deleted} event(s).`);
@@ -1015,11 +1018,12 @@ function renderSettingRow(s, readonly) {
 }
 
 async function saveSettings() {
-    const inputs = document.querySelectorAll(".setting-input:not([disabled])");
+    const inputs = document.querySelectorAll(".setting-input[data-key]:not([disabled])");
     const changes = {};
 
     inputs.forEach(input => {
         const key = input.dataset.key;
+        if (!key) return; // skip inputs without a key
         let val;
         if (input.type === "checkbox") {
             val = input.checked;

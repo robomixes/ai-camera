@@ -393,7 +393,10 @@ def create_app() -> FastAPI:
         event_type = body.get("event_type", "all")
         date_from = body.get("date_from", "")
         date_to = body.get("date_to", "")
-        deleted = db_handler.delete_all_events(event_type=event_type, date_from=date_from, date_to=date_to)
+        camera_id = body.get("camera_id", "")
+        deleted = db_handler.delete_all_events(
+            event_type=event_type, date_from=date_from, date_to=date_to, camera_id=camera_id
+        )
         return {"deleted": deleted}
 
     @app.get("/api/analytics/today")
