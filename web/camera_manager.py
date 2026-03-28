@@ -49,6 +49,8 @@ class CameraInstance:
         if self.runner:
             self.runner.stop()
             self.runner = None
+        import time
+        time.sleep(0.5)  # let AI thread fully exit before releasing camera
         if self.cam:
             self.cam.stop()
             self.cam = None

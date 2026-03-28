@@ -94,7 +94,10 @@ class RTSPBackend(CameraBase):
                     break
                 self._buffer.put(frame)
 
-            cap.release()
+            try:
+                cap.release()
+            except Exception:
+                pass  # suppress FFmpeg assertion on shutdown
             self._cap = None
 
     def _open_capture(self) -> cv2.VideoCapture | None:

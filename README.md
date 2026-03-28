@@ -53,12 +53,12 @@ python run_web.py
 ```bash
 git clone https://github.com/robomixes/ai-camera.git
 cd ai-camera
-
-# Configure camera (edit .env or docker-compose.yml)
-export RTSP_URL="rtsp://admin:password@192.168.1.9/h264Preview_01_sub"
-
 docker-compose up -d
 ```
+
+Camera can be configured either way:
+- **Before starting:** set `RTSP_URL` in `docker-compose.yml` or as env var
+- **After starting:** login to dashboard > Parameters > Camera Management > add camera URL > save > `docker-compose restart`
 
 ### Access Dashboard
 

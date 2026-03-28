@@ -3,6 +3,9 @@ opencv-python>=4.11
 numpy>=1.26
 ultralytics>=8.4
 
+# --- Face Recognition ---
+tensorflow>=2.14
+
 # --- ANPR ---
 easyocr>=1.7
 

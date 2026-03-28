@@ -9,8 +9,9 @@ WORKDIR /build
 COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
-# Pre-download EasyOCR models so first run doesn't wait
-RUN python -c "import easyocr; easyocr.Reader(['en'], gpu=False, verbose=False)" 2>/dev/null || true
+# Pre-download EasyOCR models (needs packages in path)
+ENV PYTHONPATH=/install/lib/python3.11/site-packages
+RUN python -c "import easyocr; easyocr.Reader(['en'], gpu=False, verbose=False)" || true
 
 # ===== Stage 2: Runtime =====
 FROM python:3.11-slim
@@ -23,8 +24,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy installed packages from builder
 COPY --from=builder /install /usr/local
-# Copy EasyOCR models from builder
-COPY --from=builder /root/.EasyOCR /root/.EasyOCR
+# Copy EasyOCR models if they were downloaded
+COPY --from=builder /root/.EasyOCR* /root/.EasyOCR/
 
 WORKDIR /app
 

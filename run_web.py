@@ -10,6 +10,9 @@ import config
 setup_logging()
 logger = logging.getLogger(__name__)
 
+# Suppress noisy uvicorn shutdown errors
+logging.getLogger("uvicorn.error").setLevel(logging.CRITICAL)
+
 app = create_app()
 
 if __name__ == "__main__":
@@ -17,7 +20,7 @@ if __name__ == "__main__":
     port = getattr(config, "WEB_PORT", 8080)
     logger.info(f"Starting AI Camera Dashboard at http://localhost:{port}")
     try:
-        uvicorn.run(app, host=host, port=port, log_level="warning")
+        uvicorn.run(app, host=host, port=port, log_level="error")
     except (KeyboardInterrupt, SystemExit):
         pass
     logger.info("Shutdown complete.")
