@@ -19,8 +19,10 @@ import face_recognition as face_rec
 from camera import create_camera
 from camera.base import CameraBase
 from web.ai_runner import AIRunner
-from web.auth import (initialize_auth, verify_login, change_password, create_session,
-                       get_session_user, delete_session, check_rate_limit, record_failed_attempt, clear_attempts)
+from web.auth import (initialize_auth, verify_login, change_password, reset_password, create_session,
+                       get_session_user, get_session_info, get_session_role, delete_session,
+                       check_rate_limit, record_failed_attempt, clear_attempts,
+                       has_permission, get_all_users, create_user, delete_user, update_user_role)
 from web.camera_manager import CameraManager
 from web.utils import encode_jpeg, resize_frame
 
@@ -129,8 +131,13 @@ def create_app() -> FastAPI:
 
             # Check session cookie
             token = request.cookies.get("session")
-            if token and get_session_user(token):
-                return await call_next(request)
+            if token:
+                username, role = get_session_info(token)
+                if username:
+                    # Attach user info to request state
+                    request.state.username = username
+                    request.state.role = role or "viewer"
+                    return await call_next(request)
 
             # API/stream/image requests get 401
             if path.startswith("/api/") or path.startswith("/stream") or path.startswith("/images/"):
@@ -138,6 +145,13 @@ def create_app() -> FastAPI:
 
             # HTML requests redirect to login
             return RedirectResponse("/login")
+
+    def _require_role(request: Request, min_role: str) -> JSONResponse | None:
+        """Check if current user has sufficient role. Returns error response or None."""
+        role = getattr(request.state, "role", "viewer")
+        if not has_permission(role, min_role):
+            return JSONResponse({"error": "Insufficient permissions"}, status_code=403)
+        return None
 
     app.add_middleware(AuthMiddleware)
 
@@ -195,6 +209,65 @@ def create_app() -> FastAPI:
         new_pw = body.get("new_password", "")
 
         success, message = change_password(username, old_pw, new_pw)
+        if success:
+            return {"message": message}
+        return JSONResponse({"error": message}, status_code=400)
+
+    # --- User Management ---
+    @app.get("/api/me")
+    async def get_current_user(request: Request):
+        username = getattr(request.state, "username", None)
+        role = getattr(request.state, "role", None)
+        return {"username": username, "role": role}
+
+    @app.get("/api/users")
+    async def list_users(request: Request):
+        err = _require_role(request, "admin")
+        if err: return err
+        return {"users": get_all_users()}
+
+    @app.post("/api/users")
+    async def api_create_user(request: Request):
+        err = _require_role(request, "admin")
+        if err: return err
+        body = await request.json()
+        success, message = create_user(
+            username=body.get("username", ""),
+            password=body.get("password", ""),
+            role=body.get("role", "viewer"),
+        )
+        if success:
+            return {"message": message}
+        return JSONResponse({"error": message}, status_code=400)
+
+    @app.delete("/api/users/{username}")
+    async def api_delete_user(request: Request, username: str):
+        err = _require_role(request, "admin")
+        if err: return err
+        # Can't delete yourself
+        if username == getattr(request.state, "username", ""):
+            return JSONResponse({"error": "Cannot delete your own account"}, status_code=400)
+        success, message = delete_user(username)
+        if success:
+            return {"message": message}
+        return JSONResponse({"error": message}, status_code=400)
+
+    @app.put("/api/users/{username}/role")
+    async def api_update_role(request: Request, username: str):
+        err = _require_role(request, "admin")
+        if err: return err
+        body = await request.json()
+        success, message = update_user_role(username, body.get("role", ""))
+        if success:
+            return {"message": message}
+        return JSONResponse({"error": message}, status_code=400)
+
+    @app.post("/api/users/{username}/reset-password")
+    async def api_reset_password(request: Request, username: str):
+        err = _require_role(request, "admin")
+        if err: return err
+        body = await request.json()
+        success, message = reset_password(username, body.get("password", ""))
         if success:
             return {"message": message}
         return JSONResponse({"error": message}, status_code=400)
@@ -360,6 +433,8 @@ def create_app() -> FastAPI:
     @app.post("/api/cameras/config")
     async def save_cameras_config(request: Request):
         """Save camera configuration. Requires restart to take effect."""
+        err = _require_role(request, "admin")
+        if err: return err
         body = await request.json()
         cameras = body.get("cameras", [])
 
@@ -487,6 +562,8 @@ def create_app() -> FastAPI:
 
     @app.post("/api/events/delete")
     async def delete_events(request: Request):
+        err = _require_role(request, "operator")
+        if err: return err
         body = await request.json()
         ids = body.get("ids", [])
         if not ids:
@@ -496,6 +573,8 @@ def create_app() -> FastAPI:
 
     @app.post("/api/events/delete-all")
     async def delete_all_events(request: Request):
+        err = _require_role(request, "operator")
+        if err: return err
         body = await request.json()
         event_type = body.get("event_type", "all")
         date_from = body.get("date_from", "")
@@ -518,8 +597,55 @@ def create_app() -> FastAPI:
     async def analytics_top_objects(limit: int = 10):
         return {"objects": db_handler.get_top_objects(limit=limit)}
 
+    # --- ANPR API ---
+    @app.get("/api/plates/watchlist")
+    async def get_plate_watchlist():
+        return {"watchlist": db_handler.get_plate_watchlist()}
+
+    @app.post("/api/plates/watchlist")
+    async def add_plate_to_watchlist(request: Request):
+        err = _require_role(request, "operator")
+        if err: return err
+        body = await request.json()
+        plate = body.get("plate_number", "").strip()
+        if not plate:
+            return JSONResponse({"error": "Plate number required"}, status_code=400)
+        result = db_handler.add_plate_watchlist(
+            plate_number=plate,
+            label=body.get("label", ""),
+            notes=body.get("notes", ""),
+        )
+        if "error" in result:
+            return JSONResponse(result, status_code=400)
+        return result
+
+    @app.delete("/api/plates/watchlist/{plate_id}")
+    async def remove_plate_from_watchlist(request: Request, plate_id: int):
+        err = _require_role(request, "operator")
+        if err: return err
+        if db_handler.remove_plate_watchlist(plate_id):
+            return {"deleted": plate_id}
+        return JSONResponse({"error": "Not found"}, status_code=404)
+
+    @app.post("/api/anpr/toggle")
+    async def toggle_anpr(request: Request):
+        err = _require_role(request, "admin")
+        if err: return err
+        body = await request.json()
+        enabled = bool(body.get("enabled", False))
+        config.ANPR_ENABLED = enabled
+        config.save_overrides({"ANPR_ENABLED": enabled})
+        if _manager:
+            for cid in _manager.camera_ids:
+                runner = _manager.get_runner(cid)
+                if runner:
+                    runner.anpr_enabled = enabled
+        return {"anpr_enabled": enabled}
+
     @app.post("/api/ai/mode")
     async def set_ai_mode(request: Request):
+        err = _require_role(request, "admin")
+        if err: return err
         body = await request.json()
         mode = body.get("mode", "yolo")
         cam_id = body.get("camera_id", "")
@@ -561,6 +687,10 @@ def create_app() -> FastAPI:
         "STREAM_JPEG_QUALITY": {"type": "int", "min": 10, "max": 100, "description": "JPEG quality for web stream", "category": "Stream"},
         "STREAM_MAX_WIDTH": {"type": "int", "min": 320, "max": 1920, "description": "Max width of streamed frames", "category": "Stream"},
         "STREAM_TARGET_FPS": {"type": "int", "min": 1, "max": 30, "description": "Target FPS for web stream", "category": "Stream"},
+        "ANPR_ENABLED": {"type": "bool", "description": "Enable license plate recognition", "category": "ANPR"},
+        "ANPR_FRAME_INTERVAL": {"type": "int", "min": 1, "max": 30, "description": "Run plate OCR every N frames", "category": "ANPR"},
+        "ANPR_MIN_VEHICLE_WIDTH": {"type": "int", "min": 50, "max": 500, "description": "Min vehicle width (px) for OCR", "category": "ANPR"},
+        "ANPR_PLATE_COOLDOWN_SECONDS": {"type": "float", "min": 5, "max": 300, "description": "Cooldown before re-logging same plate", "category": "ANPR"},
         "ALERT_ENABLED": {"type": "bool", "description": "Enable/disable alert notifications", "category": "Alerts"},
         "ALERT_EVENTS": {"type": "list", "description": "Alert types: unknown_face, person_detected, known_face", "category": "Alerts"},
     }
@@ -596,6 +726,8 @@ def create_app() -> FastAPI:
 
     @app.post("/api/settings")
     async def update_settings(request: Request):
+        err = _require_role(request, "admin")
+        if err: return err
         body = await request.json()
         updated = {}
         errors = {}
@@ -675,8 +807,10 @@ def create_app() -> FastAPI:
         return {"people": people}
 
     @app.post("/api/faces/enroll")
-    async def enroll_face(name: str = Form(...), files: list[UploadFile] = File(...),
+    async def enroll_face(request: Request, name: str = Form(...), files: list[UploadFile] = File(...),
                           crop_faces: bool = Form(False)):
+        err = _require_role(request, "operator")
+        if err: return err
         import cv2
         import numpy as np
 
@@ -759,7 +893,9 @@ def create_app() -> FastAPI:
         return {"name": name, "added": saved_files, "total_images": len(db[name])}
 
     @app.delete("/api/faces/{name}")
-    async def delete_person(name: str):
+    async def delete_person(request: Request, name: str):
+        err = _require_role(request, "operator")
+        if err: return err
         with _faces_lock:
             db = _read_faces_json()
             if name not in db:
@@ -778,7 +914,9 @@ def create_app() -> FastAPI:
         return {"deleted": name}
 
     @app.delete("/api/faces/{name}/image/{filename}")
-    async def delete_person_image(name: str, filename: str):
+    async def delete_person_image(request: Request, name: str, filename: str):
+        err = _require_role(request, "operator")
+        if err: return err
         with _faces_lock:
             db = _read_faces_json()
             if name not in db:
@@ -806,6 +944,9 @@ def create_app() -> FastAPI:
     for d in (event_img_dir, roi_img_dir):
         d.mkdir(parents=True, exist_ok=True)
 
+    plate_img_dir = Path(getattr(config, "PLATE_IMAGE_DIR", "plate_images"))
+    plate_img_dir.mkdir(parents=True, exist_ok=True)
+    app.mount("/images/plates", StaticFiles(directory=str(plate_img_dir)), name="plate_images")
     app.mount("/images/faces", StaticFiles(directory=str(faces_dir)), name="face_images")
     app.mount("/images/events", StaticFiles(directory=str(event_img_dir)), name="event_images")
     app.mount("/images/roi", StaticFiles(directory=str(roi_img_dir)), name="roi_images")

@@ -246,9 +246,11 @@ async function loadEvents() {
                 detail = `${ev.object_type || "-"} ${conf}`;
             } else if (type === "face") {
                 detail = `${ev.person_name || "-"} (${ev.distance || "-"})`;
+            } else if (type === "plate") {
+                detail = `${ev.plate_text || "-"} (${ev.vehicle_type || "vehicle"})`;
             }
             const hasImage = ev.image_path ? "clickable" : "";
-            const imgDir = type === "face" ? "events" : "roi";
+            const imgDir = type === "plate" ? "plates" : (type === "face" ? "events" : "roi");
             return `<tr class="${hasImage}" onclick="${ev.image_path ? `openLightboxFromEvent('${imgDir}', '${ev.image_path}', '${type}', '${detail}', '${ev.timestamp || ""}')` : ""}">
                 <td>${time}</td>
                 <td><span class="event-type ${typeClass}">${type}</span></td>
@@ -300,7 +302,7 @@ async function loadEventsPage() {
             const type = ev.event_type || "unknown";
             const typeClass = type === "detection" ? "detection" : "face";
             const time = ev.timestamp || "-";
-            const imgDir = type === "face" ? "events" : "roi";
+            const imgDir = type === "plate" ? "plates" : (type === "face" ? "events" : "roi");
             const imgUrl = ev.image_path ? `/images/${imgDir}/${ev.image_path}` : null;
             const compositeId = `${type}_${ev.id}`;
 
@@ -309,6 +311,10 @@ async function loadEventsPage() {
             if (type === "detection") {
                 title = ev.object_type || "-";
                 subtitle = ev.confidence ? (ev.confidence * 100).toFixed(0) + "% confidence" : "";
+            } else if (type === "plate") {
+                title = ev.plate_text || "-";
+                subtitle = `${ev.vehicle_type || "vehicle"} ${ev.confidence ? (ev.confidence * 100).toFixed(0) + "%" : ""}`;
+                if (ev.is_watchlist) subtitle += " WATCHLIST";
             } else {
                 title = ev.person_name || "Unknown";
                 subtitle = ev.distance ? `distance: ${ev.distance}` : "";
@@ -563,9 +569,15 @@ async function checkNewEvents() {
 // ===== Tabs =====
 
 function switchTab(tabName) {
+    const paramsTabs = ["settings", "cameras-tab", "users"];
     document.querySelectorAll(".tab-btn").forEach(btn => {
         btn.classList.toggle("active", btn.dataset.tab === tabName);
     });
+    // Highlight Parameters parent when a sub-tab is active
+    const paramsBtn = document.querySelector(".tab-dropdown .tab-btn");
+    if (paramsBtn) {
+        paramsBtn.classList.toggle("active", paramsTabs.includes(tabName));
+    }
     document.querySelectorAll(".tab-content").forEach(content => {
         content.classList.toggle("active", content.id === "tab-" + tabName);
     });
@@ -584,9 +596,25 @@ function switchTab(tabName) {
     if (tabName === "faces") {
         loadFaces();
     }
+    if (tabName === "plates") {
+        loadPlateWatchlist();
+        loadPlateReads();
+        // Sync ANPR toggle
+        fetch("/api/settings").then(r => r.json()).then(d => {
+            const el = document.getElementById("anpr-toggle");
+            if (el && d.runtime && d.runtime.ANPR_ENABLED) {
+                el.checked = d.runtime.ANPR_ENABLED.value;
+            }
+        }).catch(() => {});
+    }
+    if (tabName === "users") {
+        loadUsers();
+    }
+    if (tabName === "cameras-tab") {
+        loadCamerasConfig();
+    }
     if (tabName === "settings") {
         loadSettings();
-        loadCamerasConfig();
     }
 }
 
@@ -743,7 +771,231 @@ document.addEventListener("click", (e) => {
 
 let originalSettings = {};
 
+// ===== User Management & RBAC =====
+
+let currentUserRole = "viewer";
+
+async function loadCurrentUser() {
+    try {
+        const resp = await fetch("/api/me");
+        const data = await resp.json();
+        currentUserRole = data.role || "viewer";
+
+        // Show username + role in header
+        const userInfo = document.getElementById("user-info");
+        if (userInfo) {
+            userInfo.textContent = `${data.username} (${data.role})`;
+        }
+
+        // Apply role-based UI visibility
+        applyRoleVisibility();
+    } catch (e) {
+        console.error("Failed to load user:", e);
+    }
+}
+
+function applyRoleVisibility() {
+    const role = currentUserRole;
+
+    // Admin-only elements
+    document.querySelectorAll(".admin-only").forEach(el => {
+        el.style.display = role === "admin" ? "" : "none";
+    });
+
+    // Hide Settings tab for viewers
+    const settingsTab = document.querySelector('[data-tab="settings"]');
+    if (settingsTab) settingsTab.style.display = (role === "viewer") ? "none" : "";
+
+    // Hide Faces/Plates management for viewers
+    const facesTab = document.querySelector('[data-tab="faces"]');
+    if (facesTab) facesTab.style.display = (role === "viewer") ? "none" : "";
+
+    const platesTab = document.querySelector('[data-tab="plates"]');
+    if (platesTab) platesTab.style.display = (role === "viewer") ? "none" : "";
+
+    // Hide delete buttons for viewers
+    document.querySelectorAll(".bulk-actions-bar, #selection-bar").forEach(el => {
+        el.style.display = (role === "viewer") ? "none" : "";
+    });
+
+    // Hide mode toggle for viewers
+    const modeToggle = document.querySelector(".mode-toggle-card");
+    if (modeToggle) modeToggle.style.display = (role === "admin") ? "" : "none";
+}
+
+async function loadUsers() {
+    const container = document.getElementById("users-list");
+    if (!container) return;
+    try {
+        const resp = await fetch("/api/users");
+        if (resp.status === 403) {
+            container.innerHTML = '<div class="no-data">Admin access required</div>';
+            return;
+        }
+        const data = await resp.json();
+        const users = data.users || [];
+
+        const meResp = await fetch("/api/me");
+        const me = await meResp.json();
+
+        container.innerHTML = `<table class="event-table">
+            <thead><tr><th>Username</th><th>Role</th><th></th></tr></thead>
+            <tbody>${users.map(u => {
+                const isMe = u.username === me.username;
+                return `<tr${isMe ? ' style="background:rgba(0,212,255,0.05)"' : ''}>
+                    <td>${u.username}${isMe ? ' (you)' : ''}</td>
+                    <td>
+                        <select class="date-input" onchange="updateUserRole('${u.username}', this.value)"
+                            ${isMe ? 'disabled' : ''}>
+                            <option value="viewer" ${u.role === 'viewer' ? 'selected' : ''}>Viewer</option>
+                            <option value="operator" ${u.role === 'operator' ? 'selected' : ''}>Operator</option>
+                            <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Admin</option>
+                        </select>
+                    </td>
+                    <td style="display:flex;gap:6px">
+                        ${isMe ? '' : `<button class="btn-refresh" onclick="resetUserPassword('${u.username}')" title="Reset password">Reset PW</button>`}
+                        ${isMe ? '' : `<button class="btn-delete-person" onclick="deleteUser('${u.username}')" title="Delete user">&times;</button>`}
+                    </td>
+                </tr>`;
+            }).join("")}</tbody>
+        </table>`;
+    } catch (e) {
+        container.innerHTML = '<div class="no-data">Failed to load users</div>';
+    }
+}
+
+async function addUser() {
+    const username = document.getElementById("new-user-name").value.trim();
+    const password = document.getElementById("new-user-pass").value;
+    const role = document.getElementById("new-user-role").value;
+    const status = document.getElementById("user-mgmt-status");
+
+    if (!username || !password) {
+        status.textContent = "Username and password required";
+        status.className = "settings-status error";
+        return;
+    }
+
+    try {
+        const resp = await fetch("/api/users", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password, role })
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+            status.textContent = data.message;
+            status.className = "settings-status success";
+            document.getElementById("new-user-name").value = "";
+            document.getElementById("new-user-pass").value = "";
+            loadUsers();
+        } else {
+            status.textContent = data.error;
+            status.className = "settings-status error";
+        }
+    } catch (e) {
+        status.textContent = "Connection error";
+        status.className = "settings-status error";
+    }
+}
+
+async function deleteUser(username) {
+    if (!confirm(`Delete user "${username}"?`)) return;
+    try {
+        const resp = await fetch(`/api/users/${encodeURIComponent(username)}`, { method: "DELETE" });
+        const data = await resp.json();
+        if (resp.ok) {
+            loadUsers();
+        } else {
+            alert(data.error || "Failed to delete");
+        }
+    } catch (e) {
+        console.error("Delete user error:", e);
+    }
+}
+
+async function resetUserPassword(username) {
+    const newPw = prompt(`Enter new password for "${username}" (min 4 chars):`);
+    if (!newPw) return;
+    if (newPw.length < 4) { alert("Password must be at least 4 characters"); return; }
+
+    try {
+        const resp = await fetch(`/api/users/${encodeURIComponent(username)}/reset-password`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ password: newPw })
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+            alert(data.message || "Password reset successfully");
+        } else {
+            alert(data.error || "Failed to reset password");
+        }
+    } catch (e) {
+        console.error("Reset password error:", e);
+    }
+}
+
+async function updateUserRole(username, role) {
+    try {
+        const resp = await fetch(`/api/users/${encodeURIComponent(username)}/role`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ role })
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            alert(data.error || "Failed to update role");
+            loadUsers(); // revert dropdown
+        }
+    } catch (e) {
+        console.error("Update role error:", e);
+    }
+}
+
+// ===== Parameters Menu =====
+
+function toggleParamsMenu() {
+    document.getElementById("params-menu").classList.toggle("visible");
+}
+
+function closeParamsMenu() {
+    document.getElementById("params-menu").classList.remove("visible");
+}
+
+// Close params menu on outside click
+document.addEventListener("click", (e) => {
+    const dropdown = document.querySelector(".tab-dropdown");
+    const menu = document.getElementById("params-menu");
+    if (dropdown && !dropdown.contains(e.target) && menu && menu.classList.contains("visible")) {
+        menu.classList.remove("visible");
+    }
+});
+
 // ===== Auth =====
+
+function toggleUserMenu() {
+    const menu = document.getElementById("user-menu");
+    menu.classList.toggle("visible");
+}
+
+function showChangePassword() {
+    document.getElementById("user-menu").classList.remove("visible");
+    document.getElementById("pw-modal").style.display = "flex";
+    document.getElementById("pw-old").value = "";
+    document.getElementById("pw-new").value = "";
+    document.getElementById("pw-confirm").value = "";
+    document.getElementById("pw-status").textContent = "";
+}
+
+// Close user menu on outside click
+document.addEventListener("click", (e) => {
+    const wrap = document.querySelector(".user-menu-wrap");
+    const menu = document.getElementById("user-menu");
+    if (wrap && !wrap.contains(e.target) && menu && menu.classList.contains("visible")) {
+        menu.classList.remove("visible");
+    }
+});
 
 async function doLogout() {
     try {
@@ -1237,12 +1489,14 @@ async function loadHomeRecentEvents() {
             const type = ev.event_type || "-";
             const typeClass = type === "detection" ? "detection" : "face";
             const time = ev.timestamp ? ev.timestamp.substring(11, 19) : "-";
-            const imgDir = type === "face" ? "events" : "roi";
+            const imgDir = type === "plate" ? "plates" : (type === "face" ? "events" : "roi");
             const imgUrl = ev.image_path ? `/images/${imgDir}/${ev.image_path}` : null;
 
             let detail = "";
             if (type === "detection") {
                 detail = ev.object_type || "-";
+            } else if (type === "plate") {
+                detail = ev.plate_text || "-";
             } else {
                 detail = ev.person_name || "Unknown";
             }
@@ -1260,6 +1514,114 @@ async function loadHomeRecentEvents() {
         }).join("");
     } catch (e) {
         container.innerHTML = '<div class="no-data">Failed to load</div>';
+    }
+}
+
+// ===== Plate / ANPR =====
+
+async function toggleANPR(enabled) {
+    try {
+        await fetch("/api/anpr/toggle", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled })
+        });
+    } catch (e) {
+        console.error("Toggle ANPR error:", e);
+    }
+}
+
+async function loadPlateWatchlist() {
+    const container = document.getElementById("plate-watchlist");
+    try {
+        const resp = await fetch("/api/plates/watchlist");
+        const data = await resp.json();
+        const wl = data.watchlist || [];
+
+        if (wl.length === 0) {
+            container.innerHTML = '<div class="no-data">No plates in watchlist. Add one above.</div>';
+            return;
+        }
+
+        container.innerHTML = `<table class="event-table">
+            <thead><tr><th>Plate</th><th>Label</th><th>Notes</th><th></th></tr></thead>
+            <tbody>${wl.map(p => `<tr>
+                <td><strong style="color:#ffa726;font-family:monospace">${p.plate_number}</strong></td>
+                <td>${p.label || "-"}</td>
+                <td>${p.notes || "-"}</td>
+                <td><button class="btn-delete-person" onclick="removePlateFromWatchlist(${p.id})" title="Remove">&times;</button></td>
+            </tr>`).join("")}</tbody>
+        </table>`;
+    } catch (e) {
+        container.innerHTML = '<div class="no-data">Failed to load</div>';
+    }
+}
+
+async function addPlateToWatchlist() {
+    const plate = document.getElementById("wl-plate").value.trim();
+    const label = document.getElementById("wl-label").value.trim();
+    if (!plate) { alert("Enter a plate number"); return; }
+
+    try {
+        const resp = await fetch("/api/plates/watchlist", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ plate_number: plate, label: label })
+        });
+        const data = await resp.json();
+        if (data.error) {
+            alert(data.error);
+        } else {
+            document.getElementById("wl-plate").value = "";
+            document.getElementById("wl-label").value = "";
+            loadPlateWatchlist();
+        }
+    } catch (e) {
+        console.error("Add plate error:", e);
+    }
+}
+
+async function removePlateFromWatchlist(id) {
+    if (!confirm("Remove this plate from watchlist?")) return;
+    try {
+        await fetch(`/api/plates/watchlist/${id}`, { method: "DELETE" });
+        loadPlateWatchlist();
+    } catch (e) {
+        console.error("Remove plate error:", e);
+    }
+}
+
+async function loadPlateReads() {
+    const container = document.getElementById("plate-reads");
+    try {
+        const resp = await fetch("/api/events?limit=20&event_type=plate");
+        const data = await resp.json();
+        const events = data.events || [];
+
+        if (events.length === 0) {
+            container.innerHTML = '<div class="no-data">No plate reads yet. Enable ANPR and point camera at vehicles.</div>';
+            return;
+        }
+
+        container.innerHTML = events.map(ev => {
+            const imgUrl = ev.image_path ? `/images/plates/${ev.image_path}` : null;
+            const wlBadge = ev.is_watchlist ? '<span class="event-type-badge detection" style="background:rgba(255,82,82,0.2);color:#ff5252;border-color:rgba(255,82,82,0.3)">WATCHLIST</span>' : '';
+
+            return `<div class="event-card ${imgUrl ? 'has-image' : ''}" ${imgUrl ? `onclick="openLightbox('${imgUrl}', '${ev.plate_text}', '${ev.vehicle_type || "vehicle"}', '${ev.timestamp}')"` : ''}>
+                <div class="event-card-img">
+                    ${imgUrl ? `<img src="${imgUrl}" alt="${ev.plate_text}" loading="lazy">` : '<div class="event-card-noimg">No Image</div>'}
+                    <span class="event-type-badge" style="background:rgba(255,167,38,0.2);color:#ffa726;border:1px solid rgba(255,167,38,0.3)">plate</span>
+                    ${wlBadge}
+                </div>
+                <div class="event-card-body">
+                    <div class="event-card-title" style="font-family:monospace;color:#ffa726">${ev.plate_text || "-"}</div>
+                    <div class="event-card-sub">${ev.vehicle_type || "vehicle"} (${ev.confidence ? (ev.confidence * 100).toFixed(0) + "%" : "-"})</div>
+                    <div class="event-card-time">${ev.timestamp || "-"} <span class="event-card-cam">${ev.camera_id || ""}</span></div>
+                </div>
+            </div>`;
+        }).join("");
+    } catch (e) {
+        container.innerHTML = '<div class="no-data">Failed to load plate reads</div>';
     }
 }
 
@@ -1448,6 +1810,7 @@ async function pollStatus() {
 // ===== Init =====
 
 document.addEventListener("DOMContentLoaded", () => {
+    loadCurrentUser();
     loadCameras().then(() => {
         connectSSE();
         loadEvents();

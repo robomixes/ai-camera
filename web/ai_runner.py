@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 import db_handler
 import face_recognition as face_rec
 from camera.base import CameraBase
+from plate_reader import PlateReader
 
 
 class AIRunner:
@@ -29,6 +30,10 @@ class AIRunner:
         self._latest_detections: list = []
         self._latest_alerts: list = []
         self._fps: float = 0.0
+        # ANPR
+        self._anpr_enabled = getattr(config, "ANPR_ENABLED", False)
+        self._plate_reader: PlateReader | None = None
+        self._anpr_frame_counter = 0
         # Smart logging: track what's currently in frame
         # {detection_key: {"first_seen": time, "last_seen": time, "logged": bool}}
         self._active_detections: dict = {}
@@ -39,6 +44,13 @@ class AIRunner:
             if not face_rec.initialize_system():
                 logger.warning("Warning: FaceNet initialization failed. Falling back to YOLO.")
                 self._mode = "yolo"
+
+        # Initialize ANPR if enabled
+        if self._anpr_enabled:
+            self._plate_reader = PlateReader()
+            if not self._plate_reader.load():
+                logger.warning("ANPR: Tesseract not available. Plate reading disabled.")
+                self._anpr_enabled = False
 
         self._running = True
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
@@ -67,6 +79,20 @@ class AIRunner:
     def fps(self) -> float:
         with self._lock:
             return self._fps
+
+    @property
+    def anpr_enabled(self) -> bool:
+        return self._anpr_enabled
+
+    @anpr_enabled.setter
+    def anpr_enabled(self, value: bool) -> None:
+        if value and not self._anpr_enabled:
+            self._plate_reader = PlateReader()
+            if not self._plate_reader.load():
+                logger.warning("ANPR: Tesseract not available.")
+                return
+        self._anpr_enabled = value
+        logger.info(f"ANPR {'enabled' if value else 'disabled'}")
 
     @property
     def mode(self) -> str:
@@ -138,11 +164,11 @@ class AIRunner:
 
     def _detection_key(self, det: dict) -> str:
         """Generate a unique key for a detection to track it across frames."""
-        if det.get("name"):
-            # Face detection: key by person name
+        if det.get("plate_text"):
+            return f"plate:{det['plate_text']}"
+        elif det.get("name"):
             return f"face:{det['name']}"
         elif det.get("label"):
-            # YOLO detection: key by object class
             return f"obj:{det['label']}"
         return "unknown"
 
@@ -234,19 +260,85 @@ class AIRunner:
                     "camera": self._camera_id,
                 })
 
+            # Watchlist plate
+            plate_text = det.get("plate_text", "")
+            if "watchlist_plate" in alert_events and plate_text and det.get("is_watchlist"):
+                alerts.append({
+                    "type": "watchlist_plate",
+                    "title": f"Watchlist Plate: {plate_text}",
+                    "detail": det.get("watchlist_label", plate_text),
+                    "camera": self._camera_id,
+                })
+
         if alerts:
             with self._lock:
                 self._latest_alerts.extend(alerts)
 
     def _run_yolo(self, frame_bgr: np.ndarray) -> tuple[np.ndarray, list]:
+        # Auto-include vehicle classes when ANPR is enabled
+        classes = list(config.DETECTION_CLASSES)
+        if self._anpr_enabled:
+            vehicle_classes = getattr(config, "ANPR_VEHICLE_CLASSES", ["car", "truck", "bus", "motorcycle"])
+            for vc in vehicle_classes:
+                if vc not in classes:
+                    classes.append(vc)
+
         analyzed_frame, detected_data = ai_features.run_yolov8_detection(
             frame_bgr, self._cam.frame_size,
-            roi=None, classes_filter=config.DETECTION_CLASSES
+            roi=None, classes_filter=classes
         )
         detections = []
         for item in detected_data:
-            if isinstance(item, tuple) and len(item) == 2:
-                detections.append({"label": item[0], "confidence": round(item[1], 3)})
+            if isinstance(item, tuple) and len(item) >= 2:
+                det = {"label": item[0], "confidence": round(item[1], 3)}
+                if len(item) >= 3:
+                    det["bbox"] = item[2]
+                detections.append(det)
+
+        # ANPR: read plates from vehicle detections
+        if self._anpr_enabled and self._plate_reader and self._plate_reader.is_loaded:
+            self._anpr_frame_counter += 1
+            interval = getattr(config, "ANPR_FRAME_INTERVAL", 5)
+            if self._anpr_frame_counter % interval == 0:
+                vehicle_classes = getattr(config, "ANPR_VEHICLE_CLASSES", ["car", "truck", "bus", "motorcycle"])
+                min_width = getattr(config, "ANPR_MIN_VEHICLE_WIDTH", 100)
+                h_frame, w_frame = frame_bgr.shape[:2]
+                scale = max(w_frame / 640, 0.5)
+                font_scale = 0.4 * scale
+                thickness = max(1, int(1 * scale))
+
+                for det in detections:
+                    if det.get("label") not in vehicle_classes:
+                        continue
+                    bbox = det.get("bbox")
+                    if not bbox:
+                        continue
+                    x1, y1, x2, y2 = bbox
+                    if (x2 - x1) < min_width:
+                        continue
+
+                    # Crop vehicle and read plate
+                    vehicle_crop = frame_bgr[y1:y2, x1:x2]
+                    result = self._plate_reader.read_plate(vehicle_crop)
+                    if result:
+                        plate_det = {
+                            "type": "plate",
+                            "plate_text": result["text"],
+                            "confidence": result["confidence"],
+                            "vehicle_label": det["label"],
+                        }
+                        # Check watchlist
+                        wl = db_handler.check_plate_watchlist(result["text"])
+                        if wl:
+                            plate_det["is_watchlist"] = True
+                            plate_det["watchlist_label"] = wl.get("label", "")
+
+                        detections.append(plate_det)
+
+                        # Draw plate text on frame
+                        cv2.putText(analyzed_frame, result["text"], (x1, y2 + int(20 * scale)),
+                                    cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 255, 255), thickness)
+
         return analyzed_frame, detections
 
     def _run_facenet(self, frame_bgr: np.ndarray) -> tuple[np.ndarray, list]:
@@ -296,8 +388,11 @@ class AIRunner:
         # Merge detections
         detections = []
         for item in yolo_dets:
-            if isinstance(item, tuple) and len(item) == 2:
-                detections.append({"type": "yolo", "label": item[0], "confidence": round(item[1], 3)})
+            if isinstance(item, tuple) and len(item) >= 2:
+                det = {"type": "yolo", "label": item[0], "confidence": round(item[1], 3)}
+                if len(item) >= 3:
+                    det["bbox"] = item[2]
+                detections.append(det)
 
         for item in face_data:
             if isinstance(item, dict):
@@ -324,8 +419,9 @@ class AIRunner:
                 return
 
             # Separate detections by type
-            yolo_dets = [d for d in detections if d.get("label") and not d.get("name")]
+            yolo_dets = [d for d in detections if d.get("label") and not d.get("name") and not d.get("plate_text")]
             face_dets = [d for d in detections if d.get("name")]
+            plate_dets = [d for d in detections if d.get("plate_text")]
 
             # Save and log YOLO detections
             if yolo_dets:
@@ -360,6 +456,25 @@ class AIRunner:
                         image_filename=image_filename,
                         camera_id=self._camera_id,
                         is_known=is_known
+                    )
+
+            # Save and log plate detections
+            if plate_dets:
+                img_dir = getattr(config, "PLATE_IMAGE_DIR", "plate_images")
+                os.makedirs(img_dir, exist_ok=True)
+                image_filename = f"plate_{timestamp}.jpg"
+                cv2.imwrite(os.path.join(img_dir, image_filename), frame)
+
+                for det in plate_dets:
+                    wl = db_handler.check_plate_watchlist(det["plate_text"])
+                    db_handler.log_plate_event(
+                        plate_text=det["plate_text"],
+                        vehicle_type=det.get("vehicle_label", "vehicle"),
+                        confidence=det.get("confidence", 0),
+                        image_filename=image_filename,
+                        is_watchlist=bool(wl),
+                        watchlist_id=wl["id"] if wl else None,
+                        camera_id=self._camera_id,
                     )
 
         except Exception as e:

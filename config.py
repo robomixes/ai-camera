@@ -107,9 +107,17 @@ DETECTION_COOLDOWN_SECONDS = 60.0  # Don't re-log the same detection for this ma
 DATA_RETENTION_DAYS = 30       # Auto-delete events older than this (0 = keep forever)
 MIN_FREE_DISK_MB = 100         # Stop saving images if disk free < this
 
+# --- ANPR (License Plate Recognition) ---
+ANPR_ENABLED = False
+ANPR_FRAME_INTERVAL = 5          # Run OCR every N frames
+ANPR_MIN_VEHICLE_WIDTH = 100     # Min vehicle bbox width (px) before attempting OCR
+ANPR_PLATE_COOLDOWN_SECONDS = 30 # Don't re-log same plate for this many seconds
+ANPR_VEHICLE_CLASSES = ["car", "truck", "bus", "motorcycle"]
+PLATE_IMAGE_DIR = "plate_images"
+
 # --- Alerts ---
 ALERT_ENABLED = True
-ALERT_EVENTS = ["unknown_face", "person_detected", "known_face"]
+ALERT_EVENTS = ["unknown_face", "person_detected", "known_face", "watchlist_plate"]
 
 # --- Multi-Camera Support ---
 # If CAMERAS is empty, falls back to single-camera config above.

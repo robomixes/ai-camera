@@ -21,7 +21,15 @@
             <button class="tab-btn" data-tab="live">Live</button>
             <button class="tab-btn" data-tab="events">Events <span id="events-badge" class="tab-badge">0</span></button>
             <button class="tab-btn" data-tab="faces">Faces</button>
-            <button class="tab-btn" data-tab="settings">Settings</button>
+            <button class="tab-btn" data-tab="plates">Plates</button>
+            <div class="tab-dropdown admin-only" style="display:none">
+                <button class="tab-btn" onclick="toggleParamsMenu()">Parameters &#9662;</button>
+                <div id="params-menu" class="params-menu">
+                    <button data-tab="settings" onclick="switchTab('settings'); closeParamsMenu()">Runtime Settings</button>
+                    <button data-tab="cameras-tab" onclick="switchTab('cameras-tab'); closeParamsMenu()">Camera Management</button>
+                    <button data-tab="users" onclick="switchTab('users'); closeParamsMenu()">User Management</button>
+                </div>
+            </div>
         </nav>
         <div class="header-right">
             <!-- Notification Bell -->
@@ -53,7 +61,28 @@
             </div>
             <span id="status-dot" class="status-dot disconnected"></span>
             <span id="status-text">Connecting...</span>
-            <button class="btn-logout" onclick="doLogout()" title="Sign out">Logout</button>
+            <div class="user-menu-wrap">
+                <button id="user-info" class="user-info" onclick="toggleUserMenu()"></button>
+                <div id="user-menu" class="user-menu">
+                    <button onclick="showChangePassword()">Change Password</button>
+                    <button onclick="doLogout()">Logout</button>
+                </div>
+            </div>
+
+            <!-- Change Password Modal -->
+            <div id="pw-modal" class="pw-modal" style="display:none" onclick="if(event.target===this)this.style.display='none'">
+                <div class="pw-modal-content">
+                    <h3>Change Password</h3>
+                    <div class="enroll-field"><label>Current Password</label><input type="password" id="pw-old" autocomplete="current-password"></div>
+                    <div class="enroll-field"><label>New Password</label><input type="password" id="pw-new" autocomplete="new-password"></div>
+                    <div class="enroll-field"><label>Confirm Password</label><input type="password" id="pw-confirm" autocomplete="new-password"></div>
+                    <div style="display:flex; gap:10px; margin-top:12px; align-items:center;">
+                        <button class="btn-enroll" onclick="changePassword()">Change</button>
+                        <button class="btn-refresh" onclick="document.getElementById('pw-modal').style.display='none'">Cancel</button>
+                        <span id="pw-status" class="settings-status"></span>
+                    </div>
+                </div>
+            </div>
         </div>
     </header>
 
@@ -233,6 +262,7 @@
                     <button class="filter-btn active" data-filter="all">All</button>
                     <button class="filter-btn" data-filter="detection">Detections</button>
                     <button class="filter-btn" data-filter="face">Faces</button>
+                    <button class="filter-btn" data-filter="plate">Plates</button>
                 </div>
                 <div class="filter-group">
                     <label>Camera:</label>
@@ -324,16 +354,50 @@
         </div>
     </div>
 
-    <!-- ===== SETTINGS TAB ===== -->
-    <div id="tab-settings" class="tab-content">
-        <div class="settings-page">
-            <div id="settings-container"></div>
-            <div class="settings-actions">
-                <button class="btn-save-settings" onclick="saveSettings()">Save Changes</button>
-                <span id="settings-status" class="settings-status"></span>
+    <!-- ===== PLATES TAB ===== -->
+    <div id="tab-plates" class="tab-content">
+        <div class="plates-page">
+            <!-- ANPR Toggle + Watchlist Add -->
+            <div class="plates-toolbar">
+                <label class="anpr-toggle">
+                    <input type="checkbox" id="anpr-toggle" onchange="toggleANPR(this.checked)">
+                    <span>ANPR Enabled</span>
+                </label>
+                <div class="watchlist-add-form">
+                    <input type="text" id="wl-plate" placeholder="Plate number (e.g. ABC1234)" class="date-input">
+                    <input type="text" id="wl-label" placeholder="Label (e.g. John's car)" class="date-input">
+                    <button class="btn-enroll" onclick="addPlateToWatchlist()">Add to Watchlist</button>
+                </div>
             </div>
 
-            <!-- Camera Management -->
+            <!-- Watchlist -->
+            <div class="card">
+                <div class="card-header">
+                    <span>Plate Watchlist</span>
+                    <button class="btn-refresh" onclick="loadPlateWatchlist()">Refresh</button>
+                </div>
+                <div class="card-body">
+                    <div id="plate-watchlist" class="plate-watchlist">
+                        <div class="no-data">Loading...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recent Plate Reads -->
+            <div class="card" style="margin-top: 14px;">
+                <div class="card-header">Recent Plate Reads</div>
+                <div class="card-body">
+                    <div id="plate-reads" class="events-grid">
+                        <div class="no-data">Loading...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== CAMERAS TAB (admin only) ===== -->
+    <div id="tab-cameras-tab" class="tab-content">
+        <div class="settings-page">
             <h3 class="settings-section-title">Camera Management <span class="settings-hint">Requires restart after changes</span></h3>
             <div class="card settings-card">
                 <div class="card-header">
@@ -350,43 +414,81 @@
                     </div>
                 </div>
             </div>
+        </div>
+    </div>
 
-            <!-- Change Password -->
-            <div class="card settings-card" style="margin-top: 20px;">
-                <div class="card-header">Change Password</div>
+    <!-- ===== USERS TAB (admin only) ===== -->
+    <div id="tab-users" class="tab-content">
+        <div class="settings-page">
+            <h3 class="settings-section-title">User Management</h3>
+
+            <!-- Add User Form -->
+            <div class="card settings-card">
+                <div class="card-header">Add New User</div>
                 <div class="card-body">
-                    <div class="password-form">
-                        <div class="setting-row">
-                            <div class="setting-label">
-                                <span class="setting-key">Current Password</span>
-                            </div>
-                            <div class="setting-value">
-                                <input type="password" id="pw-old" class="setting-input" autocomplete="current-password">
-                            </div>
+                    <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end;">
+                        <div class="enroll-field" style="min-width: 150px;">
+                            <label>Username</label>
+                            <input type="text" id="new-user-name" placeholder="username">
                         </div>
-                        <div class="setting-row">
-                            <div class="setting-label">
-                                <span class="setting-key">New Password</span>
-                            </div>
-                            <div class="setting-value">
-                                <input type="password" id="pw-new" class="setting-input" autocomplete="new-password">
-                            </div>
+                        <div class="enroll-field" style="min-width: 150px;">
+                            <label>Password</label>
+                            <input type="password" id="new-user-pass" placeholder="password">
                         </div>
-                        <div class="setting-row">
-                            <div class="setting-label">
-                                <span class="setting-key">Confirm Password</span>
-                            </div>
-                            <div class="setting-value">
-                                <input type="password" id="pw-confirm" class="setting-input" autocomplete="new-password">
-                            </div>
+                        <div class="enroll-field" style="min-width: 120px;">
+                            <label>Role</label>
+                            <select id="new-user-role" class="date-input">
+                                <option value="viewer">Viewer</option>
+                                <option value="operator">Operator</option>
+                                <option value="admin">Admin</option>
+                            </select>
                         </div>
-                        <div style="display: flex; align-items: center; gap: 12px; margin-top: 12px;">
-                            <button class="btn-save-settings" onclick="changePassword()">Change Password</button>
-                            <span id="pw-status" class="settings-status"></span>
-                        </div>
+                        <button class="btn-enroll" onclick="addUser()">Add User</button>
                     </div>
+                    <span id="user-mgmt-status" class="settings-status"></span>
                 </div>
             </div>
+
+            <!-- Users List -->
+            <div class="card settings-card" style="margin-top: 14px;">
+                <div class="card-header">
+                    <span>All Users</span>
+                    <button class="btn-refresh" onclick="loadUsers()">Refresh</button>
+                </div>
+                <div class="card-body">
+                    <div id="users-list"><div class="no-data">Loading...</div></div>
+                </div>
+            </div>
+
+            <!-- Role Descriptions -->
+            <div class="card settings-card" style="margin-top: 14px;">
+                <div class="card-header">Role Permissions</div>
+                <div class="card-body">
+                    <table class="event-table">
+                        <thead><tr><th>Permission</th><th>Viewer</th><th>Operator</th><th>Admin</th></tr></thead>
+                        <tbody>
+                            <tr><td>View live streams & events</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+                            <tr><td>Manage faces & plates</td><td>-</td><td>Yes</td><td>Yes</td></tr>
+                            <tr><td>Delete events</td><td>-</td><td>Yes</td><td>Yes</td></tr>
+                            <tr><td>Change settings & cameras</td><td>-</td><td>-</td><td>Yes</td></tr>
+                            <tr><td>Manage users</td><td>-</td><td>-</td><td>Yes</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== SETTINGS TAB ===== -->
+    <div id="tab-settings" class="tab-content">
+        <div class="settings-page">
+            <div id="settings-container"></div>
+            <div class="settings-actions">
+                <button class="btn-save-settings" onclick="saveSettings()">Save Changes</button>
+                <span id="settings-status" class="settings-status"></span>
+            </div>
+
+            <!-- Change Password moved to header user menu modal -->
         </div>
     </div>
 

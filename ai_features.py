@@ -87,7 +87,7 @@ def run_yolov8_detection(frame, frame_size, roi=None, classes_filter=None):
                             cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness)
             else:
                 color = FILTERED_COLOR
-                filtered_detected_data.append((label, conf))
+                filtered_detected_data.append((label, conf, (x1, y1, x2, y2)))
                 cv2.circle(annotated_frame, (center_x, center_y), circle_r, color, -1)
                 cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, thickness)
                 cv2.putText(annotated_frame, label, (x1, y1 - line_h - 5),

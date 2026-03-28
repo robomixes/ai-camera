@@ -374,6 +374,7 @@ config_overrides.json
 auth.json
 event_images/
 roi_events/
+plate_images/
 output_images/
 recorded/
 *.db

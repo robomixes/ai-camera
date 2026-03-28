@@ -83,8 +83,13 @@ class RTSPBackend(CameraBase):
             backoff = 1.0  # reset on successful connect
 
             while self._running:
-                ret, frame = cap.read()
+                try:
+                    ret, frame = cap.read()
+                except Exception:
+                    break  # capture released during shutdown
                 if not ret:
+                    if not self._running:
+                        break  # clean shutdown
                     logger.warning("RTSP frame read failed. Reconnecting...")
                     break
                 self._buffer.put(frame)

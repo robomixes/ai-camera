@@ -3,6 +3,9 @@ opencv-python>=4.11
 numpy>=1.26
 ultralytics>=8.4
 
+# --- ANPR ---
+pytesseract>=0.3.10
+
 # --- Web ---
 fastapi>=0.135
 uvicorn[standard]>=0.42

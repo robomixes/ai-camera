@@ -50,6 +50,35 @@ def initialize_db():
         )
     ''')
     
+    # 3. Table for Plate Events
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS plate_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            camera_id TEXT,
+            latitude REAL,
+            longitude REAL,
+            plate_text TEXT NOT NULL,
+            vehicle_type TEXT,
+            confidence REAL,
+            image_path TEXT,
+            is_watchlist INTEGER DEFAULT 0,
+            watchlist_id INTEGER
+        )
+    ''')
+
+    # 4. Plate Watchlist
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS plate_watchlist (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            plate_number TEXT NOT NULL UNIQUE,
+            label TEXT DEFAULT '',
+            notes TEXT DEFAULT '',
+            alert_enabled INTEGER DEFAULT 1,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
     # Indexes for query performance
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_det_timestamp ON detections(timestamp)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_det_camera ON detections(camera_id)")
@@ -58,6 +87,11 @@ def initialize_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_face_camera ON face_events(camera_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_face_known ON face_events(is_known)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_face_person ON face_events(person_name)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_plate_timestamp ON plate_events(timestamp)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_plate_camera ON plate_events(camera_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_plate_text ON plate_events(plate_text)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_plate_watchlist ON plate_events(is_watchlist)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pwl_plate ON plate_watchlist(plate_number)")
 
     conn.commit()
     conn.close()
@@ -174,6 +208,15 @@ def get_recent_events(limit: int = 50, event_type: str = "all", offset: int = 0,
             for row in cursor.fetchall():
                 events.append(dict(row))
 
+        if event_type in ("all", "plate"):
+            cursor.execute(
+                "SELECT id, timestamp, camera_id, plate_text, vehicle_type, confidence, image_path, is_watchlist, "
+                f"'plate' as event_type FROM plate_events WHERE 1=1{date_where}{cam_where} ORDER BY timestamp DESC",
+                date_params + cam_params
+            )
+            for row in cursor.fetchall():
+                events.append(dict(row))
+
         conn.close()
 
         # Sort combined results by timestamp descending
@@ -204,6 +247,10 @@ def get_event_count(event_type: str = "all", date_from: str = "", date_to: str =
 
         if event_type in ("all", "face"):
             cursor.execute(f"SELECT COUNT(*) FROM face_events WHERE 1=1{date_where}{cam_where}", date_params + cam_params)
+            total += cursor.fetchone()[0]
+
+        if event_type in ("all", "plate"):
+            cursor.execute(f"SELECT COUNT(*) FROM plate_events WHERE 1=1{date_where}{cam_where}", date_params + cam_params)
             total += cursor.fetchone()[0]
 
         conn.close()
@@ -241,6 +288,13 @@ def delete_all_events(event_type: str = "all", date_from: str = "", date_to: str
             cursor.execute(f"DELETE FROM face_events WHERE 1=1{date_where}{cam_where}", all_params)
             deleted += cursor.rowcount
 
+        if event_type in ("all", "plate"):
+            cursor.execute(f"SELECT image_path FROM plate_events WHERE 1=1{date_where}{cam_where}", all_params)
+            for row in cursor.fetchall():
+                _delete_image_file(row["image_path"], getattr(config, "PLATE_IMAGE_DIR", "plate_images"))
+            cursor.execute(f"DELETE FROM plate_events WHERE 1=1{date_where}{cam_where}", all_params)
+            deleted += cursor.rowcount
+
         conn.commit()
         conn.close()
     except Exception as e:
@@ -270,6 +324,7 @@ def delete_events(ids: list) -> int:
 
         det_ids = []
         face_ids = []
+        plate_ids = []
         for eid in ids:
             parts = str(eid).split("_", 1)
             if len(parts) == 2:
@@ -277,6 +332,8 @@ def delete_events(ids: list) -> int:
                     det_ids.append(int(parts[1]))
                 elif parts[0] == "face":
                     face_ids.append(int(parts[1]))
+                elif parts[0] == "plate":
+                    plate_ids.append(int(parts[1]))
 
         if det_ids:
             placeholders = ",".join("?" * len(det_ids))
@@ -294,6 +351,14 @@ def delete_events(ids: list) -> int:
             cursor.execute(f"DELETE FROM face_events WHERE id IN ({placeholders})", face_ids)
             deleted += cursor.rowcount
 
+        if plate_ids:
+            placeholders = ",".join("?" * len(plate_ids))
+            cursor.execute(f"SELECT image_path FROM plate_events WHERE id IN ({placeholders})", plate_ids)
+            for row in cursor.fetchall():
+                _delete_image_file(row["image_path"], getattr(config, "PLATE_IMAGE_DIR", "plate_images"))
+            cursor.execute(f"DELETE FROM plate_events WHERE id IN ({placeholders})", plate_ids)
+            deleted += cursor.rowcount
+
         conn.commit()
         conn.close()
     except Exception as e:
@@ -304,7 +369,8 @@ def delete_events(ids: list) -> int:
 def get_today_stats() -> dict:
     """Get detection counts for today."""
     today = datetime.now().strftime("%Y-%m-%d")
-    stats = {"total_detections": 0, "total_faces": 0, "persons": 0, "known_faces": 0, "unknown_faces": 0}
+    stats = {"total_detections": 0, "total_faces": 0, "persons": 0, "known_faces": 0, "unknown_faces": 0,
+             "total_plates": 0, "watchlist_hits": 0}
     try:
         conn = sqlite3.connect(config.DB_NAME)
         cursor = conn.cursor()
@@ -324,6 +390,13 @@ def get_today_stats() -> dict:
         stats["known_faces"] = cursor.fetchone()[0]
 
         stats["unknown_faces"] = stats["total_faces"] - stats["known_faces"]
+
+        cursor.execute("SELECT COUNT(*) FROM plate_events WHERE timestamp >= ?", (f"{today} 00:00:00",))
+        stats["total_plates"] = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM plate_events WHERE timestamp >= ? AND is_watchlist = 1",
+                       (f"{today} 00:00:00",))
+        stats["watchlist_hits"] = cursor.fetchone()[0]
 
         conn.close()
     except Exception as e:
@@ -430,6 +503,99 @@ def cleanup_old_data(retention_days: int = 0) -> int:
     return deleted
 
 
+def log_plate_event(plate_text, vehicle_type, confidence, image_filename,
+                    is_watchlist=False, watchlist_id=None, camera_id="", latitude=None, longitude=None):
+    """Log a license plate detection event."""
+    cam_id = camera_id or config.CAMERA_ID
+    lat = latitude if latitude is not None else config.GPS_LATITUDE
+    lon = longitude if longitude is not None else config.GPS_LONGITUDE
+    try:
+        conn = sqlite3.connect(config.DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO plate_events (
+                camera_id, latitude, longitude, plate_text, vehicle_type,
+                confidence, image_path, is_watchlist, watchlist_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (cam_id, lat, lon, plate_text, vehicle_type, confidence,
+              image_filename, 1 if is_watchlist else 0, watchlist_id))
+        conn.commit()
+        conn.close()
+        logger.info(f"Logged Plate Event: {plate_text} from {cam_id}")
+    except Exception as e:
+        logger.error(f"Error logging plate event: {e}")
+
+
+def get_plate_watchlist() -> list:
+    """Get all plate watchlist entries."""
+    try:
+        conn = sqlite3.connect(config.DB_NAME)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM plate_watchlist ORDER BY created_at DESC")
+        result = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return result
+    except Exception as e:
+        logger.error(f"Error getting plate watchlist: {e}")
+        return []
+
+
+def add_plate_watchlist(plate_number: str, label: str = "", notes: str = "") -> dict:
+    """Add a plate to the watchlist. Returns the new entry or error."""
+    plate_number = plate_number.upper().strip()
+    try:
+        conn = sqlite3.connect(config.DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO plate_watchlist (plate_number, label, notes) VALUES (?, ?, ?)",
+            (plate_number, label, notes)
+        )
+        new_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return {"id": new_id, "plate_number": plate_number, "label": label, "notes": notes}
+    except sqlite3.IntegrityError:
+        return {"error": f"Plate '{plate_number}' already in watchlist"}
+    except Exception as e:
+        logger.error(f"Error adding plate to watchlist: {e}")
+        return {"error": str(e)}
+
+
+def remove_plate_watchlist(plate_id: int) -> bool:
+    """Remove a plate from the watchlist by ID."""
+    try:
+        conn = sqlite3.connect(config.DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM plate_watchlist WHERE id = ?", (plate_id,))
+        deleted = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return deleted
+    except Exception as e:
+        logger.error(f"Error removing plate from watchlist: {e}")
+        return False
+
+
+def check_plate_watchlist(plate_text: str) -> dict | None:
+    """Check if a plate matches any watchlist entry (case-insensitive, stripped)."""
+    plate_text = plate_text.upper().strip()
+    try:
+        conn = sqlite3.connect(config.DB_NAME)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM plate_watchlist WHERE UPPER(REPLACE(plate_number, ' ', '')) = ? AND alert_enabled = 1",
+            (plate_text.replace(" ", ""),)
+        )
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+    except Exception as e:
+        logger.error(f"Error checking plate watchlist: {e}")
+        return None
+
+
 def export_events(event_type: str = "all", date_from: str = "", date_to: str = "",
                    camera_id: str = "") -> list[dict]:
     """Export all events matching filters (no pagination). Returns list of dicts."""
@@ -459,6 +625,15 @@ def export_events(event_type: str = "all", date_from: str = "", date_to: str = "
             cursor.execute(
                 "SELECT timestamp, camera_id, person_name, distance, is_known, image_path, "
                 f"'face' as event_type FROM face_events WHERE 1=1{date_where}{cam_where} ORDER BY timestamp DESC",
+                all_params
+            )
+            for row in cursor.fetchall():
+                events.append(dict(row))
+
+        if event_type in ("all", "plate"):
+            cursor.execute(
+                "SELECT timestamp, camera_id, plate_text, vehicle_type, confidence, image_path, is_watchlist, "
+                f"'plate' as event_type FROM plate_events WHERE 1=1{date_where}{cam_where} ORDER BY timestamp DESC",
                 all_params
             )
             for row in cursor.fetchall():
