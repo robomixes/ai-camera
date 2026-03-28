@@ -2,6 +2,9 @@
 
 import os
 import json
+import logging
+
+_logger = logging.getLogger(__name__)
 
 # --- Runtime Overrides (persisted across restarts) ---
 _OVERRIDES_FILE = "config_overrides.json"
@@ -14,9 +17,9 @@ def _load_overrides():
                 overrides = json.load(f)
             for key, value in overrides.items():
                 globals()[key] = value
-            print(f"Loaded {len(overrides)} setting override(s) from {_OVERRIDES_FILE}")
+            _logger.info(f"Loaded {len(overrides)} setting override(s) from {_OVERRIDES_FILE}")
         except Exception as e:
-            print(f"Warning: Could not load overrides: {e}")
+            _logger.warning(f"Could not load overrides: {e}")
 
 def save_overrides(settings: dict):
     """Save runtime settings to JSON file for persistence."""
@@ -31,7 +34,7 @@ def save_overrides(settings: dict):
     existing.update(settings)
     with open(_OVERRIDES_FILE, 'w') as f:
         json.dump(existing, f, indent=2)
-    print(f"Saved {len(settings)} setting(s) to {_OVERRIDES_FILE}")
+    _logger.info(f"Saved {len(settings)} setting(s) to {_OVERRIDES_FILE}")
 
 # --- Camera Identity & Location ---
 CAMERA_ID = "CAM_001"
@@ -99,6 +102,10 @@ DEFAULT_AI_MODE = "both"  # "yolo", "facenet", or "both"
 
 # --- Smart Logging ---
 DETECTION_COOLDOWN_SECONDS = 60.0  # Don't re-log the same detection for this many seconds
+
+# --- Data Retention ---
+DATA_RETENTION_DAYS = 30       # Auto-delete events older than this (0 = keep forever)
+MIN_FREE_DISK_MB = 100         # Stop saving images if disk free < this
 
 # --- Alerts ---
 ALERT_ENABLED = True

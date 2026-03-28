@@ -1,14 +1,17 @@
+import logging
 import cv2
 import numpy as np
 from ultralytics import YOLO
+
+logger = logging.getLogger(__name__)
 # Removed import config, assuming it's imported in ai-general.py only
 
 # Initialize YOLOv8 model once when the module is loaded
 try:
     YOLO_MODEL = YOLO('yolov8n.pt')
-    print("YOLOv8n model loaded successfully.")
+    logger.info("YOLOv8n model loaded successfully.")
 except Exception as e:
-    print(f"Error loading YOLOv8n model: {e}")
+    logger.error(f"Error loading YOLOv8n model: {e}")
     YOLO_MODEL = None
 
 

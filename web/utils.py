@@ -1,5 +1,17 @@
+import shutil
 import cv2
 import numpy as np
+import config
+
+
+def has_disk_space() -> bool:
+    """Check if there's enough free disk space to save images."""
+    min_mb = getattr(config, "MIN_FREE_DISK_MB", 100)
+    try:
+        usage = shutil.disk_usage(".")
+        return (usage.free // (1024 * 1024)) > min_mb
+    except Exception:
+        return True  # assume ok if check fails
 
 
 def encode_jpeg(frame: np.ndarray, quality: int = 70) -> bytes:

@@ -55,6 +55,7 @@ def _mask_sensitive(data: dict) -> dict:
 
 # --- Globals set during lifespan ---
 _manager: CameraManager | None = None
+_start_time: float = 0.0
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -70,7 +71,8 @@ def _get_runner(camera_id: str = ""):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _manager
+    global _manager, _start_time
+    _start_time = time.time()
 
     # Startup
     initialize_auth()
@@ -79,7 +81,32 @@ async def lifespan(app: FastAPI):
     _manager = CameraManager()
     _manager.start_all()
 
+    # Start background maintenance task
+    async def _maintenance_loop():
+        import logging as _log
+        maint_logger = _log.getLogger("maintenance")
+        while True:
+            await asyncio.sleep(3600)  # Run every hour
+            try:
+                retention = getattr(config, "DATA_RETENTION_DAYS", 0)
+                if retention > 0:
+                    deleted = db_handler.cleanup_old_data(retention)
+                    if deleted:
+                        maint_logger.info(f"Maintenance: cleaned up {deleted} old events")
+
+                # Cleanup expired sessions
+                from web.auth import cleanup_expired_sessions
+                expired = cleanup_expired_sessions()
+                if expired:
+                    maint_logger.info(f"Maintenance: removed {expired} expired sessions")
+            except Exception as e:
+                maint_logger.error(f"Maintenance error: {e}")
+
+    maintenance_task = asyncio.create_task(_maintenance_loop())
+
     yield
+
+    maintenance_task.cancel()
 
     # Shutdown
     if _manager:
@@ -90,7 +117,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="AI Camera", lifespan=lifespan)
 
     # --- Auth Middleware ---
-    PUBLIC_PATHS = {"/login", "/api/login", "/static/css/style.css", "/static/js/app.js"}
+    PUBLIC_PATHS = {"/login", "/api/login", "/api/health", "/static/css/style.css", "/static/js/app.js"}
 
     class AuthMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request: Request, call_next):
@@ -105,8 +132,8 @@ def create_app() -> FastAPI:
             if token and get_session_user(token):
                 return await call_next(request)
 
-            # API requests get 401
-            if path.startswith("/api/") or path.startswith("/stream"):
+            # API/stream/image requests get 401
+            if path.startswith("/api/") or path.startswith("/stream") or path.startswith("/images/"):
                 return JSONResponse({"error": "Unauthorized"}, status_code=401)
 
             # HTML requests redirect to login
@@ -244,11 +271,12 @@ def create_app() -> FastAPI:
     async def status(camera_id: str = ""):
         cam = _get_cam(camera_id)
         runner = _get_runner(camera_id)
-        # Check if camera actually has frames (not just thread running)
+        # Check if camera has recent frames (cached, no frame consumption)
         has_signal = False
-        if cam and cam.is_running():
-            frame = cam.get_frame()
-            has_signal = frame is not None
+        if cam:
+            has_signal = hasattr(cam, 'has_signal') and cam.has_signal() or (
+                not hasattr(cam, 'has_signal') and cam.is_running() and cam.get_frame() is not None
+            )
         return {
             "camera_connected": has_signal,
             "camera_type": config.CAMERA_TYPE,
@@ -257,6 +285,53 @@ def create_app() -> FastAPI:
             "ai_fps": round(runner.fps, 1) if runner else 0,
             "cameras": _manager.list_cameras() if _manager else [],
             "multi_camera": _manager.is_multi if _manager else False,
+        }
+
+    @app.get("/api/health")
+    async def health():
+        import shutil
+        import sqlite3 as _sqlite3
+
+        # Check cameras
+        cameras_status = []
+        any_connected = False
+        if _manager:
+            for cam_info in _manager.list_cameras():
+                cameras_status.append({
+                    "id": cam_info["id"],
+                    "connected": cam_info["connected"],
+                    "fps": cam_info.get("ai_fps", 0),
+                })
+                if cam_info["connected"]:
+                    any_connected = True
+
+        # Check database
+        db_ok = False
+        try:
+            conn = _sqlite3.connect(config.DB_NAME)
+            conn.execute("SELECT 1")
+            conn.close()
+            db_ok = True
+        except Exception:
+            pass
+
+        # Check disk
+        try:
+            disk = shutil.disk_usage(".")
+            disk_free_mb = disk.free // (1024 * 1024)
+            disk_total_mb = disk.total // (1024 * 1024)
+        except Exception:
+            disk_free_mb = -1
+            disk_total_mb = -1
+
+        healthy = any_connected and db_ok and disk_free_mb > 100
+        return {
+            "status": "healthy" if healthy else "degraded",
+            "cameras": cameras_status,
+            "database": db_ok,
+            "disk_free_mb": disk_free_mb,
+            "disk_total_mb": disk_total_mb,
+            "uptime_seconds": int(time.time() - _start_time),
         }
 
     @app.get("/api/cameras")
@@ -378,6 +453,38 @@ def create_app() -> FastAPI:
         total = db_handler.get_event_count(event_type=event_type, date_from=date_from, date_to=date_to, camera_id=camera_id)
         return {"events": events, "total": total, "offset": offset, "limit": limit}
 
+    @app.get("/api/events/export")
+    async def export_events(event_type: str = "all", date_from: str = "", date_to: str = "",
+                            camera_id: str = "", format: str = "csv"):
+        events = db_handler.export_events(
+            event_type=event_type, date_from=date_from, date_to=date_to, camera_id=camera_id
+        )
+
+        if format == "json":
+            return JSONResponse(
+                content=events,
+                headers={"Content-Disposition": "attachment; filename=events.json"}
+            )
+
+        # CSV format
+        import io
+        output = io.StringIO()
+        if events:
+            headers = list(events[0].keys())
+            output.write(",".join(headers) + "\n")
+            for ev in events:
+                row = []
+                for h in headers:
+                    val = str(ev.get(h, "")).replace('"', '""')
+                    row.append(f'"{val}"')
+                output.write(",".join(row) + "\n")
+
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=events.csv"}
+        )
+
     @app.post("/api/events/delete")
     async def delete_events(request: Request):
         body = await request.json()
@@ -449,6 +556,8 @@ def create_app() -> FastAPI:
         "RECOGNITION_THRESHOLD": {"type": "float", "min": 0.1, "max": 2.0, "description": "Distance below which a face is 'known'", "category": "Face Recognition"},
         "REJECTION_DISTANCE": {"type": "float", "min": 0.5, "max": 3.0, "description": "Distance above which detection is rejected", "category": "Face Recognition"},
         "DETECTION_COOLDOWN_SECONDS": {"type": "float", "min": 5, "max": 600, "description": "Seconds before re-logging same detection", "category": "Detection"},
+        "DATA_RETENTION_DAYS": {"type": "int", "min": 0, "max": 365, "description": "Auto-delete events older than this (0 = keep forever)", "category": "Storage"},
+        "MIN_FREE_DISK_MB": {"type": "int", "min": 50, "max": 10000, "description": "Stop saving images if disk free below this (MB)", "category": "Storage"},
         "STREAM_JPEG_QUALITY": {"type": "int", "min": 10, "max": 100, "description": "JPEG quality for web stream", "category": "Stream"},
         "STREAM_MAX_WIDTH": {"type": "int", "min": 320, "max": 1920, "description": "Max width of streamed frames", "category": "Stream"},
         "STREAM_TARGET_FPS": {"type": "int", "min": 1, "max": 30, "description": "Target FPS for web stream", "category": "Stream"},
@@ -583,10 +692,16 @@ def create_app() -> FastAPI:
                 face_detector = cv2.CascadeClassifier(cascade_path)
 
         saved_files = []
+        MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10MB per file
         skipped = 0
         for i, file in enumerate(files):
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            content = await file.read()
+            content = await file.read(MAX_UPLOAD_SIZE + 1)
+            if len(content) > MAX_UPLOAD_SIZE:
+                return JSONResponse(
+                    {"error": f"File '{file.filename}' too large (max 10MB)"},
+                    status_code=413
+                )
 
             if crop_faces and face_detector is not None:
                 # Decode image and detect faces

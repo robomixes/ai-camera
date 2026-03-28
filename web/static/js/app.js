@@ -393,6 +393,31 @@ async function deleteSelected() {
 
 // ===== Bulk Delete =====
 
+async function exportEvents(format) {
+    let url = `/api/events/export?format=${format}&event_type=${eventsFilter}`;
+    if (eventsDateFrom) url += `&date_from=${eventsDateFrom}`;
+    if (eventsDateTo) url += `&date_to=${eventsDateTo}`;
+    if (eventsCameraFilter) url += `&camera_id=${eventsCameraFilter}`;
+
+    try {
+        const resp = await fetch(url);
+        if (!resp.ok) {
+            alert("Export failed");
+            return;
+        }
+        const blob = await resp.blob();
+        const ext = format === "json" ? "json" : "csv";
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `events.${ext}`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+    } catch (e) {
+        console.error("Export error:", e);
+        alert("Export failed");
+    }
+}
+
 async function deleteAllFiltered() {
     const filterLabel = eventsFilter === "all" ? "ALL" : eventsFilter;
     const dateInfo = eventsDateFrom || eventsDateTo

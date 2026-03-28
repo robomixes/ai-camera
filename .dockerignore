@@ -1,0 +1,17 @@
+venv/
+__pycache__/
+*.pyc
+.vs/
+.git/
+logs/
+event_images/
+roi_events/
+output_images/
+recorded/
+*.db
+config_overrides.json
+auth.json
+data/
+.dockerignore
+Dockerfile
+docker-compose.yml

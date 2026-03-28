@@ -12,6 +12,7 @@ class FrameBuffer:
         self._maxsize = maxsize
         self._buffer: list[np.ndarray] = []
         self._frame_count = 0
+        self._last_put_time: float = 0.0
 
     def put(self, frame: np.ndarray) -> None:
         with self._condition:
@@ -19,7 +20,15 @@ class FrameBuffer:
                 self._buffer.pop(0)
             self._buffer.append(frame)
             self._frame_count += 1
+            self._last_put_time = time.time()
             self._condition.notify_all()
+
+    def has_recent_frame(self, max_age: float = 3.0) -> bool:
+        """Check if a frame was received within max_age seconds."""
+        with self._lock:
+            if not self._buffer or self._last_put_time == 0:
+                return False
+            return (time.time() - self._last_put_time) < max_age
 
     def get_latest(self) -> np.ndarray | None:
         with self._lock:

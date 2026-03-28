@@ -366,6 +366,9 @@ FodyWeavers.xsd
 # Virtual environment
 venv/
 
+# Logs
+logs/
+
 # Runtime data (images, videos, database, settings overrides)
 config_overrides.json
 auth.json

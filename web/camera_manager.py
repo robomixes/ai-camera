@@ -4,7 +4,10 @@ import time
 from camera import create_camera
 from camera.base import CameraBase
 from web.ai_runner import AIRunner
+import logging
 import config
+
+logger = logging.getLogger(__name__)
 
 
 class CameraInstance:
@@ -28,14 +31,14 @@ class CameraInstance:
         self.cam.start()
 
         # Wait for first frame
-        print(f"[{self.id}] Waiting for camera stream...")
+        logger.info(f"[{self.id}] Waiting for camera stream...")
         for _ in range(150):
             if self.cam.get_frame() is not None:
-                print(f"[{self.id}] Camera stream ready.")
+                logger.info(f"[{self.id}] Camera stream ready.")
                 break
             time.sleep(0.1)
         else:
-            print(f"[{self.id}] WARNING - No frames received after 15s.")
+            logger.warning(f"[{self.id}] WARNING - No frames received after 15s.")
 
         ai_mode = self.config.get("ai_mode", getattr(config, "DEFAULT_AI_MODE", "yolo"))
         self.runner = AIRunner(self.cam, mode=ai_mode, camera_id=self.id)
@@ -77,24 +80,47 @@ class CameraManager:
         }]
 
     def start_all(self):
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
         configs = self._get_camera_configs()
-        for cam_cfg in configs:
-            cam_id = cam_cfg["id"]
-            try:
-                instance = CameraInstance(cam_cfg)
-                instance.start()
-                self._instances[cam_id] = instance
-                print(f"Camera '{cam_id}' started.")
-            except Exception as e:
-                print(f"Failed to start camera '{cam_id}': {e}")
+
+        if len(configs) <= 1:
+            # Single camera — start directly
+            for cam_cfg in configs:
+                self._start_one(cam_cfg)
+            return
+
+        # Multiple cameras — start in parallel
+        logger.info(f"Starting {len(configs)} cameras in parallel...")
+        with ThreadPoolExecutor(max_workers=len(configs)) as executor:
+            futures = {
+                executor.submit(self._start_one, cfg): cfg["id"]
+                for cfg in configs
+            }
+            for future in as_completed(futures):
+                cam_id = futures[future]
+                try:
+                    future.result()
+                except Exception as e:
+                    logger.error(f"Failed to start camera '{cam_id}': {e}")
+
+    def _start_one(self, cam_cfg: dict):
+        cam_id = cam_cfg["id"]
+        try:
+            instance = CameraInstance(cam_cfg)
+            instance.start()
+            self._instances[cam_id] = instance
+            logger.info(f"Camera '{cam_id}' started.")
+        except Exception as e:
+            logger.error(f"Failed to start camera '{cam_id}': {e}")
 
     def stop_all(self):
         for cam_id, instance in self._instances.items():
             try:
                 instance.stop()
-                print(f"Camera '{cam_id}' stopped.")
+                logger.info(f"Camera '{cam_id}' stopped.")
             except Exception as e:
-                print(f"Error stopping camera '{cam_id}': {e}")
+                logger.error(f"Error stopping camera '{cam_id}': {e}")
         self._instances.clear()
 
     def get_instance(self, camera_id: str = "") -> CameraInstance | None:
@@ -117,7 +143,10 @@ class CameraManager:
         for cam_id, inst in self._instances.items():
             runner = inst.runner
             cam = inst.cam
-            has_signal = cam is not None and cam.is_running() and cam.get_frame() is not None
+            has_signal = cam is not None and (
+                hasattr(cam, 'has_signal') and cam.has_signal() or
+                (not hasattr(cam, 'has_signal') and cam.is_running() and cam.get_frame() is not None)
+            )
             result.append({
                 "id": cam_id,
                 "description": inst.description,

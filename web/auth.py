@@ -4,7 +4,11 @@ import os
 import secrets
 import time
 
+import logging
+
 import bcrypt
+
+logger = logging.getLogger(__name__)
 
 AUTH_FILE = "auth.json"
 
@@ -70,9 +74,9 @@ def initialize_auth() -> None:
             }
         }
         _save_auth(auth)
-        print("Auth: Created default admin user (admin/admin)")
+        logger.info("Auth: Created default admin user (admin/admin)")
     else:
-        print(f"Auth: Loaded {len(auth['users'])} user(s)")
+        logger.info(f"Auth: Loaded {len(auth['users'])} user(s)")
 
 
 def check_rate_limit(ip: str) -> tuple[bool, int]:
@@ -122,7 +126,7 @@ def verify_login(username: str, password: str) -> bool:
         # Migrate to bcrypt
         user["password"] = _hash_password(password)
         _save_auth(auth)
-        print(f"Auth: Migrated '{username}' password from SHA-256 to bcrypt")
+        logger.info(f"Auth: Migrated '{username}' password from SHA-256 to bcrypt")
         return True
 
     return False
@@ -161,22 +165,39 @@ def generate_session_token() -> str:
     return secrets.token_hex(32)
 
 
-# Session store (in-memory)
-_sessions: dict[str, str] = {}  # token -> username
+# Session store (in-memory, with TTL)
+SESSION_TTL = 86400  # 24 hours
+_sessions: dict[str, tuple[str, float]] = {}  # token -> (username, created_at)
 
 
 def create_session(username: str) -> str:
     """Create a session and return the token."""
     token = generate_session_token()
-    _sessions[token] = username
+    _sessions[token] = (username, time.time())
     return token
 
 
 def get_session_user(token: str) -> str | None:
-    """Get the username for a session token, or None if invalid."""
-    return _sessions.get(token)
+    """Get the username for a session token, or None if expired."""
+    entry = _sessions.get(token)
+    if entry is None:
+        return None
+    username, created_at = entry
+    if time.time() - created_at > SESSION_TTL:
+        del _sessions[token]
+        return None
+    return username
 
 
 def delete_session(token: str) -> None:
     """Delete a session."""
     _sessions.pop(token, None)
+
+
+def cleanup_expired_sessions() -> int:
+    """Remove expired sessions. Returns count removed."""
+    now = time.time()
+    expired = [t for t, (_, created) in _sessions.items() if now - created > SESSION_TTL]
+    for t in expired:
+        del _sessions[t]
+    return len(expired)

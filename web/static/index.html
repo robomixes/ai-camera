@@ -148,37 +148,21 @@
                     </div>
                 </div>
 
-                <!-- Mode Switch Bar -->
-                <div class="mode-bar">
-                    <div class="mode-bar-label">AI Mode</div>
-                    <div class="mode-buttons">
-                        <button id="btn-yolo" class="mode-btn mode-btn-yolo active" onclick="setMode('yolo')">
-                            <span class="mode-btn-icon">&#9678;</span>
-                            <span class="mode-btn-text">
-                                <strong>Object Detection</strong>
-                                <small>YOLOv8 - persons, vehicles, objects</small>
-                            </span>
-                        </button>
-                        <button id="btn-facenet" class="mode-btn mode-btn-face" onclick="setMode('facenet')">
-                            <span class="mode-btn-icon">&#9786;</span>
-                            <span class="mode-btn-text">
-                                <strong>Face Recognition</strong>
-                                <small>FaceNet - identify known faces</small>
-                            </span>
-                        </button>
-                        <button id="btn-both" class="mode-btn mode-btn-both" onclick="setMode('both')">
-                            <span class="mode-btn-icon">&#9881;</span>
-                            <span class="mode-btn-text">
-                                <strong>Both</strong>
-                                <small>YOLO + FaceNet combined</small>
-                            </span>
-                        </button>
-                    </div>
-                </div>
+                <!-- Mode bar removed — controls moved to sidebar -->
             </div>
 
             <!-- Sidebar -->
             <div class="sidebar">
+                <!-- AI Mode Toggle -->
+                <div class="mode-toggle-card">
+                    <span class="mode-toggle-label">AI Mode</span>
+                    <div class="mode-toggle">
+                        <button id="btn-yolo" class="mode-seg active" onclick="setMode('yolo')" title="Object Detection">YOLO</button>
+                        <button id="btn-facenet" class="mode-seg" onclick="setMode('facenet')" title="Face Recognition">Face</button>
+                        <button id="btn-both" class="mode-seg" onclick="setMode('both')" title="YOLO + Face combined">Both</button>
+                    </div>
+                </div>
+
                 <div class="card">
                     <div class="card-header">
                         <span id="det-card-title">Object Detections</span>
@@ -270,6 +254,8 @@
                         <span>Auto-refresh</span>
                     </label>
                     <button class="btn-refresh" onclick="loadEventsPage()">Refresh Now</button>
+                    <button class="btn-export" onclick="exportEvents('csv')">Export CSV</button>
+                    <button class="btn-export" onclick="exportEvents('json')">Export JSON</button>
                 </div>
                 <div class="events-page-info">
                     <span id="events-showing">-</span>

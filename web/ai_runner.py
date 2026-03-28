@@ -5,8 +5,11 @@ from datetime import datetime
 import numpy as np
 import cv2
 
+import logging
 import config
 import ai_features
+
+logger = logging.getLogger(__name__)
 import db_handler
 import face_recognition as face_rec
 from camera.base import CameraBase
@@ -34,20 +37,20 @@ class AIRunner:
     def start(self) -> None:
         if self._mode in ("facenet", "both"):
             if not face_rec.initialize_system():
-                print("Warning: FaceNet initialization failed. Falling back to YOLO.")
+                logger.warning("Warning: FaceNet initialization failed. Falling back to YOLO.")
                 self._mode = "yolo"
 
         self._running = True
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
-        print(f"AI Runner started (mode: {self._mode})")
+        logger.info(f"AI Runner started (mode: {self._mode})")
 
     def stop(self) -> None:
         self._running = False
         if self._thread is not None:
             self._thread.join(timeout=5.0)
             self._thread = None
-        print("AI Runner stopped.")
+        logger.info("AI Runner stopped.")
 
     def get_latest(self) -> tuple[np.ndarray | None, list]:
         with self._lock:
@@ -73,14 +76,16 @@ class AIRunner:
     def mode(self, value: str) -> None:
         if value in ("facenet", "both") and self._mode not in ("facenet", "both"):
             if not face_rec.initialize_system():
-                print("Warning: FaceNet initialization failed.")
+                logger.warning("Warning: FaceNet initialization failed.")
                 return
         self._mode = value
-        print(f"AI Runner mode switched to: {value}")
+        logger.info(f"AI Runner mode switched to: {value}")
 
     def _run_loop(self) -> None:
         frame_count = 0
         fps_start = time.time()
+        last_process_time = 0.0
+        target_interval = 1.0 / max(getattr(config, "STREAM_TARGET_FPS", 10), 1)
 
         while self._running:
             frame_bgr = self._cam.get_frame()
@@ -88,7 +93,16 @@ class AIRunner:
                 time.sleep(0.01)
                 continue
 
+            # Frame skipping: if last frame took longer than target interval,
+            # grab the freshest frame and discard stale ones
+            if last_process_time > target_interval:
+                fresh = self._cam.get_frame()
+                if fresh is not None:
+                    frame_bgr = fresh
+
             try:
+                process_start = time.time()
+
                 # Keep clean frame for event image saving
                 clean_frame = frame_bgr.copy()
 
@@ -100,6 +114,8 @@ class AIRunner:
                     annotated, detections = self._run_both(frame_bgr)
                 else:
                     annotated, detections = frame_bgr, []
+
+                last_process_time = time.time() - process_start
 
                 with self._lock:
                     self._latest_frame = annotated
@@ -117,7 +133,7 @@ class AIRunner:
                     fps_start = time.time()
 
             except Exception as e:
-                print(f"AI Runner error: {e}")
+                logger.error(f"AI Runner error: {e}")
                 time.sleep(0.1)
 
     def _detection_key(self, det: dict) -> str:
@@ -169,8 +185,8 @@ class AIRunner:
                 entry["logged"] = True
                 entry["log_time"] = now
 
-        # Log new detections and generate alerts — use clean frame for saving
-        save_frame = clean_frame if clean_frame is not None and clean_frame.mean() >= 1.0 else annotated_frame
+        # Log new detections and generate alerts — use annotated frame (with boxes) for saving
+        save_frame = annotated_frame if annotated_frame is not None and annotated_frame.mean() >= 1.0 else clean_frame
         if new_detections and save_frame is not None and save_frame.mean() >= 1.0:
             self._log_event(save_frame, new_detections)
             self._generate_alerts(new_detections)
@@ -301,6 +317,12 @@ class AIRunner:
             if frame is None or frame.mean() < 1.0:
                 return
 
+            # Skip if low disk space
+            from web.utils import has_disk_space
+            if not has_disk_space():
+                logger.warning("Low disk space — skipping event image save")
+                return
+
             # Separate detections by type
             yolo_dets = [d for d in detections if d.get("label") and not d.get("name")]
             face_dets = [d for d in detections if d.get("name")]
@@ -341,4 +363,4 @@ class AIRunner:
                     )
 
         except Exception as e:
-            print(f"AI Runner logging error: {e}")
+            logger.error(f"AI Runner logging error: {e}")

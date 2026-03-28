@@ -1,9 +1,12 @@
+import logging
 import os
 import threading
 import time
 import cv2
 from camera.base import CameraBase
 from camera.frame_buffer import FrameBuffer
+
+logger = logging.getLogger(__name__)
 
 # Suppress FFmpeg h264 decode warnings
 os.environ["OPENCV_FFMPEG_LOGLEVEL"] = "quiet"
@@ -31,23 +34,31 @@ class RTSPBackend(CameraBase):
         frame = self._buffer.wait_for_frame(timeout=5.0)
         if frame is not None:
             self._height, self._width = frame.shape[:2]
-            print(f"RTSP stream connected: {self._url} ({self._width}x{self._height})")
+            logger.info(f"RTSP stream connected: {self._url} ({self._width}x{self._height})")
         else:
-            print(f"Warning: No frame received yet from {self._url}")
+            logger.warning(f"Warning: No frame received yet from {self._url}")
 
     def stop(self) -> None:
         self._running = False
-        if self._thread is not None:
-            self._thread.join(timeout=5.0)
-            self._thread = None
+        # Release capture first to unblock cap.read() in the thread
         if self._cap is not None:
-            self._cap.release()
+            try:
+                self._cap.release()
+            except Exception:
+                pass
             self._cap = None
+        if self._thread is not None:
+            self._thread.join(timeout=3.0)
+            self._thread = None
         self._buffer.clear()
-        print("RTSP stream stopped.")
+        logger.info("RTSP stream stopped.")
 
     def get_frame(self):
         return self._buffer.get_latest()
+
+    def has_signal(self) -> bool:
+        """Check if camera has recent frames (without consuming a frame)."""
+        return self._running and self._buffer.has_recent_frame()
 
     def is_running(self) -> bool:
         return self._running
@@ -63,7 +74,7 @@ class RTSPBackend(CameraBase):
         while self._running:
             cap = self._open_capture()
             if cap is None:
-                print(f"RTSP reconnecting in {backoff:.0f}s...")
+                logger.warning(f"RTSP reconnecting in {backoff:.0f}s...")
                 time.sleep(backoff)
                 backoff = min(backoff * 2, max_backoff)
                 continue
@@ -74,7 +85,7 @@ class RTSPBackend(CameraBase):
             while self._running:
                 ret, frame = cap.read()
                 if not ret:
-                    print("RTSP frame read failed. Reconnecting...")
+                    logger.warning("RTSP frame read failed. Reconnecting...")
                     break
                 self._buffer.put(frame)
 
@@ -90,7 +101,7 @@ class RTSPBackend(CameraBase):
 
         cap = cv2.VideoCapture(self._url, cv2.CAP_FFMPEG)
         if not cap.isOpened():
-            print(f"Failed to open RTSP stream: {self._url}")
+            logger.error(f"Failed to open RTSP stream: {self._url}")
             cap.release()
             return None
         return cap

@@ -1,8 +1,11 @@
 # db_handler.py - Handles SQLite logging with GPS, Camera ID, and Configurable Paths
 
+import logging
 import sqlite3
 import os
-import config  # Pulls DB_NAME, EVENT_IMAGE_DIR, CAMERA_ID, and GPS info
+import config
+
+logger = logging.getLogger(__name__)
 
 def initialize_db():
     """Creates the SQLite database and tables based on paths in config.py."""
@@ -10,12 +13,12 @@ def initialize_db():
     # Ensure the event image directory exists
     if not os.path.exists(config.EVENT_IMAGE_DIR):
         os.makedirs(config.EVENT_IMAGE_DIR)
-        print(f"Created directory: {config.EVENT_IMAGE_DIR}")
+        logger.info(f"Created directory: {config.EVENT_IMAGE_DIR}")
 
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
     
-    print(f"Initializing database: {config.DB_NAME}")
+    logger.info(f"Initializing database: {config.DB_NAME}")
 
     # 1. Table for General YOLO Detections
     cursor.execute('''
@@ -47,9 +50,18 @@ def initialize_db():
         )
     ''')
     
+    # Indexes for query performance
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_det_timestamp ON detections(timestamp)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_det_camera ON detections(camera_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_det_type ON detections(object_type)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_face_timestamp ON face_events(timestamp)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_face_camera ON face_events(camera_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_face_known ON face_events(is_known)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_face_person ON face_events(person_name)")
+
     conn.commit()
     conn.close()
-    print("Database tables verified.")
+    logger.info("Database tables and indexes verified.")
 
 def log_detection(detection_data, roi_area, image_filename, camera_id="", latitude=None, longitude=None):
     """Logs general object detections."""
@@ -80,7 +92,7 @@ def log_detection(detection_data, roi_area, image_filename, camera_id="", latitu
         conn.commit()
         conn.close()
     except Exception as e:
-        print(f"Error logging detection to DB: {e}")
+        logger.error(f"Error logging detection to DB: {e}")
 
 def log_face_detection_event(name, distance, image_filename, is_known, camera_id="", latitude=None, longitude=None):
     """Logs a Face Recognition event."""
@@ -111,9 +123,9 @@ def log_face_detection_event(name, distance, image_filename, is_known, camera_id
         
         conn.commit()
         conn.close()
-        print(f"Logged Face Event: {name} from {config.CAMERA_ID}")
+        logger.info(f"Logged Face Event: {name} from {config.CAMERA_ID}")
     except Exception as e:
-        print(f"Error logging face event to DB: {e}")
+        logger.error(f"Error logging face event to DB: {e}")
 
 def _build_date_clause(date_from: str, date_to: str) -> tuple[str, list]:
     """Build SQL WHERE clause for date filtering."""
@@ -169,7 +181,7 @@ def get_recent_events(limit: int = 50, event_type: str = "all", offset: int = 0,
         return events[offset:offset + limit]
 
     except Exception as e:
-        print(f"Error querying events: {e}")
+        logger.error(f"Error querying events: {e}")
         return []
 
 
@@ -196,7 +208,7 @@ def get_event_count(event_type: str = "all", date_from: str = "", date_to: str =
 
         conn.close()
     except Exception as e:
-        print(f"Error counting events: {e}")
+        logger.error(f"Error counting events: {e}")
     return total
 
 
@@ -232,7 +244,7 @@ def delete_all_events(event_type: str = "all", date_from: str = "", date_to: str
         conn.commit()
         conn.close()
     except Exception as e:
-        print(f"Error bulk deleting events: {e}")
+        logger.error(f"Error bulk deleting events: {e}")
     return deleted
 
 
@@ -285,7 +297,7 @@ def delete_events(ids: list) -> int:
         conn.commit()
         conn.close()
     except Exception as e:
-        print(f"Error deleting events: {e}")
+        logger.error(f"Error deleting events: {e}")
     return deleted
 
 
@@ -315,7 +327,7 @@ def get_today_stats() -> dict:
 
         conn.close()
     except Exception as e:
-        print(f"Error getting today stats: {e}")
+        logger.error(f"Error getting today stats: {e}")
     return stats
 
 
@@ -350,7 +362,7 @@ def get_hourly_activity(hours: int = 24) -> list:
 
         conn.close()
     except Exception as e:
-        print(f"Error getting hourly activity: {e}")
+        logger.error(f"Error getting hourly activity: {e}")
     return activity
 
 
@@ -372,12 +384,91 @@ def get_top_objects(limit: int = 10) -> list:
 
         conn.close()
     except Exception as e:
-        print(f"Error getting top objects: {e}")
+        logger.error(f"Error getting top objects: {e}")
     return objects
 
 
 # need datetime import at module level
-from datetime import datetime
+from datetime import datetime, timedelta
+
+
+def cleanup_old_data(retention_days: int = 0) -> int:
+    """Delete events and images older than retention_days. Returns total deleted."""
+    if retention_days <= 0:
+        return 0
+
+    cutoff = (datetime.now() - timedelta(days=retention_days)).strftime("%Y-%m-%d %H:%M:%S")
+    deleted = 0
+
+    try:
+        conn = sqlite3.connect(config.DB_NAME)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        # Delete old detection events + images
+        cursor.execute("SELECT image_path FROM detections WHERE timestamp < ?", (cutoff,))
+        for row in cursor.fetchall():
+            _delete_image_file(row["image_path"], config.ROI_OUTPUT_DIR)
+        cursor.execute("DELETE FROM detections WHERE timestamp < ?", (cutoff,))
+        deleted += cursor.rowcount
+
+        # Delete old face events + images
+        cursor.execute("SELECT image_path FROM face_events WHERE timestamp < ?", (cutoff,))
+        for row in cursor.fetchall():
+            _delete_image_file(row["image_path"], config.EVENT_IMAGE_DIR)
+        cursor.execute("DELETE FROM face_events WHERE timestamp < ?", (cutoff,))
+        deleted += cursor.rowcount
+
+        conn.commit()
+        conn.close()
+
+        if deleted > 0:
+            logger.info(f"Data retention cleanup: deleted {deleted} events older than {retention_days} days")
+    except Exception as e:
+        logger.error(f"Error during retention cleanup: {e}")
+
+    return deleted
+
+
+def export_events(event_type: str = "all", date_from: str = "", date_to: str = "",
+                   camera_id: str = "") -> list[dict]:
+    """Export all events matching filters (no pagination). Returns list of dicts."""
+    events = []
+    date_where, date_params = _build_date_clause(date_from, date_to)
+    cam_where = ""
+    cam_params = []
+    if camera_id:
+        cam_where = " AND camera_id = ?"
+        cam_params = [camera_id]
+    all_params = date_params + cam_params
+    try:
+        conn = sqlite3.connect(config.DB_NAME)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        if event_type in ("all", "detection"):
+            cursor.execute(
+                "SELECT timestamp, camera_id, object_type, confidence, image_path, "
+                f"'detection' as event_type FROM detections WHERE 1=1{date_where}{cam_where} ORDER BY timestamp DESC",
+                all_params
+            )
+            for row in cursor.fetchall():
+                events.append(dict(row))
+
+        if event_type in ("all", "face"):
+            cursor.execute(
+                "SELECT timestamp, camera_id, person_name, distance, is_known, image_path, "
+                f"'face' as event_type FROM face_events WHERE 1=1{date_where}{cam_where} ORDER BY timestamp DESC",
+                all_params
+            )
+            for row in cursor.fetchall():
+                events.append(dict(row))
+
+        conn.close()
+        events.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    except Exception as e:
+        logger.error(f"Error exporting events: {e}")
+    return events
 
 
 # Run initialization if script is executed directly

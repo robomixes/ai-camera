@@ -1,5 +1,8 @@
+import logging
 import time
 from camera.base import CameraBase
+
+logger = logging.getLogger(__name__)
 
 
 class PicameraBackend(CameraBase):
@@ -21,7 +24,7 @@ class PicameraBackend(CameraBase):
         self._picam2.configure(config)
         self._picam2.start()
         self._running = True
-        print("Picamera2 started.")
+        logger.info("Picamera2 started.")
         time.sleep(1)
 
     def stop(self) -> None:
@@ -33,7 +36,7 @@ class PicameraBackend(CameraBase):
                 pass
             self._picam2 = None
         self._running = False
-        print("Picamera2 stopped.")
+        logger.info("Picamera2 stopped.")
 
     def get_frame(self):
         if self._picam2 is None:

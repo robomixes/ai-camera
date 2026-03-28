@@ -221,7 +221,75 @@ header h1 {
     border: 1px solid rgba(255, 167, 38, 0.3);
 }
 
-/* ===== Mode Switch Bar ===== */
+/* ===== Compact Mode Toggle ===== */
+.mode-toggle-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: #16213e;
+    border: 1px solid #1e2d4a;
+    border-radius: 10px;
+    padding: 8px 14px;
+}
+
+.mode-toggle-label {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #6b7280;
+    font-weight: 600;
+}
+
+.mode-toggle {
+    display: flex;
+    background: #0f0f1a;
+    border-radius: 6px;
+    overflow: hidden;
+    border: 1px solid #1e2d4a;
+}
+
+.mode-seg {
+    padding: 6px 16px;
+    border: none;
+    background: transparent;
+    color: #6b7280;
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    border-right: 1px solid #1e2d4a;
+}
+
+.mode-seg:last-child {
+    border-right: none;
+}
+
+.mode-seg:hover {
+    color: #e0e0e0;
+    background: #1a1f35;
+}
+
+.mode-seg.active {
+    color: #1a1a2e;
+    font-weight: 700;
+}
+
+#btn-yolo.active {
+    background: #00e676;
+    color: #1a1a2e;
+}
+
+#btn-facenet.active {
+    background: #00d4ff;
+    color: #1a1a2e;
+}
+
+#btn-both.active {
+    background: #ffa726;
+    color: #1a1a2e;
+}
+
+/* ===== Legacy Mode Switch Bar (kept for reference) ===== */
 .mode-bar {
     background: #16213e;
     border-radius: 0 0 10px 10px;
@@ -640,6 +708,23 @@ header h1 {
 
 .auto-refresh-toggle input {
     accent-color: #00d4ff;
+}
+
+.btn-export {
+    background: #16213e;
+    border: 1px solid #00d4ff;
+    color: #00d4ff;
+    padding: 5px 12px;
+    border-radius: 4px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-export:hover {
+    background: #00d4ff;
+    color: #1a1a2e;
 }
 
 /* Date filter */

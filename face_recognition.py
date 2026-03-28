@@ -3,14 +3,19 @@
 import cv2
 import numpy as np
 import json
+import logging
 import os
 import sys
 import datetime
 import threading
 import time
 
+logger = logging.getLogger(__name__)
+
 # Thread lock for TFLite interpreter (not thread-safe)
 _inference_lock = threading.Lock()
+# Thread lock for tracking state (TRACKED_FACES, LOGGING_BUFFER, NEXT_TRACK_ID)
+_tracking_lock = threading.Lock()
 try:
     from tensorflow.lite.python.interpreter import Interpreter
 except ImportError:
@@ -153,10 +158,10 @@ def initialize_facenet_model():
     try:
         FACENET_INTERPRETER = Interpreter(model_path=config.FACENET_MODEL_PATH)
         FACENET_INTERPRETER.allocate_tensors()
-        print(f"FaceNet Model loaded from {config.FACENET_MODEL_PATH}.")
+        logger.info(f"FaceNet Model loaded from {config.FACENET_MODEL_PATH}.")
         return True
     except Exception as e:
-        print(f"ERROR: Failed to load FaceNet model: {e}")
+        logger.error(f"ERROR: Failed to load FaceNet model: {e}")
         return False
 
 def load_known_faces_from_images():
@@ -168,7 +173,7 @@ def load_known_faces_from_images():
     
     try:
         if not os.path.exists(config.KNOWN_FACES_DB):
-            print(f"WARNING: Known faces JSON file NOT FOUND at {config.KNOWN_FACES_DB}.")
+            logger.warning(f"WARNING: Known faces JSON file NOT FOUND at {config.KNOWN_FACES_DB}.")
             return False 
 
         with open(config.KNOWN_FACES_DB, 'r') as f:
@@ -177,10 +182,10 @@ def load_known_faces_from_images():
                  raise TypeError("JSON file must be a dictionary.")
 
     except Exception as e:
-        print(f"ERROR: Failed to read/parse face definitions JSON: {e}")
+        logger.error(f"ERROR: Failed to read/parse face definitions JSON: {e}")
         return False
         
-    print("Calculating average embeddings from known face images...")
+    logger.info("Calculating average embeddings from known face images...")
     
     for name, image_list in face_defs.items():
         person_embeddings = []
@@ -206,9 +211,9 @@ def load_known_faces_from_images():
         if person_embeddings:
             avg_embedding = np.mean(person_embeddings, axis=0)
             KNOWN_EMBEDDINGS[name] = avg_embedding
-            print(f"  -> Calculated average embedding for '{name}' from {len(person_embeddings)} images.")
+            logger.info(f"  -> Calculated average embedding for '{name}' from {len(person_embeddings)} images.")
 
-    print(f"Known faces loaded successfully: {len(KNOWN_EMBEDDINGS)} unique names.")
+    logger.info(f"Known faces loaded successfully: {len(KNOWN_EMBEDDINGS)} unique names.")
     return True
     
 def initialize_system():
@@ -220,9 +225,9 @@ def initialize_system():
     try:
         FACE_DETECTOR = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
         if FACE_DETECTOR.empty():
-            print("WARNING: Haar Cascade (detection step) not found. Face detection reliability may suffer.")
+            logger.warning("WARNING: Haar Cascade (detection step) not found. Face detection reliability may suffer.")
     except Exception as e:
-        print(f"WARNING: Haar Cascade (detection step) could not be loaded: {e}")
+        logger.warning(f"WARNING: Haar Cascade (detection step) could not be loaded: {e}")
         
     return load_known_faces_from_images()
 
@@ -387,7 +392,7 @@ def run_facenet_recognition(frame, picam2_frame_size):
     current_embeddings = []
     
     if FACE_DETECTOR and not FACE_DETECTOR.empty():
-        # Scale down for faster/better Haar Cascade detection on high-res frames
+        # Adaptive scaling for Haar Cascade detection
         h_img, w_img = frame.shape[:2]
         max_detect_width = 800
         if w_img > max_detect_width:
@@ -397,8 +402,12 @@ def run_facenet_recognition(frame, picam2_frame_size):
             scale = 1.0
             small = frame
 
+        # Adaptive min face size based on detection frame width
+        detect_w = small.shape[1]
+        min_face = max(20, int(detect_w * 0.05))  # 5% of frame width, min 20px
+
         gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-        small_boxes = FACE_DETECTOR.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+        small_boxes = FACE_DETECTOR.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(min_face, min_face))
 
         # Scale boxes back to original resolution
         raw_face_boxes = []
@@ -408,28 +417,32 @@ def run_facenet_recognition(frame, picam2_frame_size):
                 int(w / scale), int(h / scale)
             ))
 
+        valid_boxes = []
         for (x, y, w, h) in raw_face_boxes:
             face_image = frame[y:y+h, x:x+w]
             embedding = get_face_embedding(face_image)
             if embedding is not None:
                 current_embeddings.append(embedding)
-            else:
-                raw_face_boxes.remove((x,y,w,h))
+                valid_boxes.append((x, y, w, h))
+        raw_face_boxes = valid_boxes
         
     # ------------------------------------------------------------------
-    # STEP 2: TRACKING AND AGGREGATION
+    # STEP 2: TRACKING AND AGGREGATION (locked for thread safety)
     # ------------------------------------------------------------------
-    
-    clean_stale_tracks()
-    associate_detections(raw_face_boxes, current_embeddings)
-    
-    detected_faces = [] 
-    
+
+    with _tracking_lock:
+        clean_stale_tracks()
+        associate_detections(raw_face_boxes, current_embeddings)
+        # Snapshot current tracks for iteration (safe to read outside lock)
+        tracked_snapshot = list(TRACKED_FACES.items())
+
+    detected_faces = []
+
     # ------------------------------------------------------------------
     # STEP 3: RECOGNITION, DRAWING, and BUFFERING
     # ------------------------------------------------------------------
-    
-    for t_id, t_face in TRACKED_FACES.items():
+
+    for t_id, t_face in tracked_snapshot:
         
         # Perform recognition as soon as we have any embedding (was 2, now 1 for faster detection)
         if len(t_face.embedding_history) >= 1:
@@ -480,20 +493,21 @@ def run_facenet_recognition(frame, picam2_frame_size):
             person_name = display_name
             current_quality = distance
 
-            if person_name not in LOGGING_BUFFER:
-                LOGGING_BUFFER[person_name] = {
-                    'last_log_time': time.time() - config.LOG_DELAY_SECONDS,
-                    'best_frame': None,
-                    'best_quality': float('inf'),
-                    'distance': distance
-                }
+            with _tracking_lock:
+                if person_name not in LOGGING_BUFFER:
+                    LOGGING_BUFFER[person_name] = {
+                        'last_log_time': time.time() - config.LOG_DELAY_SECONDS,
+                        'best_frame': None,
+                        'best_quality': float('inf'),
+                        'distance': distance
+                    }
 
-            buffer_entry = LOGGING_BUFFER[person_name]
+                buffer_entry = LOGGING_BUFFER[person_name]
 
-            if current_quality < buffer_entry['best_quality']:
-                buffer_entry['best_quality'] = current_quality
-                buffer_entry['distance'] = distance
-                buffer_entry['best_frame'] = annotated_frame.copy()
+                if current_quality < buffer_entry['best_quality']:
+                    buffer_entry['best_quality'] = current_quality
+                    buffer_entry['distance'] = distance
+                    buffer_entry['best_frame'] = annotated_frame.copy()
 
         detected_faces.append((display_name, 1.0 - distance))
 
