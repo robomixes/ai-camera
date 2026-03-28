@@ -50,6 +50,8 @@ python run_web.py
 
 ### Option 2: Docker
 
+**Prerequisites:** Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows/Mac) or Docker Engine (Linux).
+
 ```bash
 git clone https://github.com/robomixes/ai-camera.git
 cd ai-camera
