@@ -366,6 +366,9 @@ FodyWeavers.xsd
 # Virtual environment
 venv/
 
+# Archive (legacy files)
+archive/
+
 # Logs
 logs/
 
