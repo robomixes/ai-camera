@@ -3,15 +3,22 @@ __pycache__/
 *.pyc
 .vs/
 .git/
+.gitignore
+.dockerignore
+
+# Runtime data (mounted as volumes)
 logs/
 event_images/
 roi_events/
+plate_images/
 output_images/
 recorded/
+data/
 *.db
 config_overrides.json
 auth.json
-data/
-.dockerignore
-Dockerfile
-docker-compose.yml
+
+# Dev files
+*.md
+docs/
+assets/

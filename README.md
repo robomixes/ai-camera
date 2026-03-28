@@ -1,135 +1,191 @@
 # AI-Camera
 
-## Python-Based Intelligent Vision Framework for Raspberry Pi and Any Camera
+## AI-Powered Multi-Camera Surveillance System
 
-AI-Camera is an open-source **Python** project designed to turn standard cameras into **AI-powered smart vision systems**.  
-The project is **built around Raspberry Pi and the Pi Camera**, but thanks to its modular architecture, it can be **easily adapted to work with any camera source**, including USB webcams, IP cameras, and industrial cameras.
-
-AI-Camera is ideal for **edge AI**, robotics, surveillance, and IoT applications.
+AI-Camera is an open-source Python surveillance system with real-time AI detection, face recognition, license plate reading, and a web dashboard. Runs on Raspberry Pi and PC.
 
 ---
 
-## 🚀 Features
+## Features
 
-- Real-time AI inference using YOLO-based object detection
-- Built-in **person detection and people searching**
-- Integrated **face detection** module
-- Support for **Region of Interest (ROI)**-based logic
-- Modular and extensible Python architecture
-- Database logging for detections and events
-- Designed to run continuously as a Linux service (systemd) on Raspberry Pi
-- Easy adaptation to different camera sources
-
----
-
-## 🧠Supported AI Capabilities
-## Object Detection
-
-- General object detection using YOLO models
-- Class-based filtering (e.g. detect only person)
-- Optimized for real-time performance on edge devices
-
-## Person Detection & Searching
-
-- Detects people in mixed environments
-- Supports ROI-based searching (detect people only in defined areas)
-- Can be used for tracking, monitoring, or triggering actions
-
-## Face Detection
-
-- Dedicated face detection module
-- Uses classical Haarcascade or AI-based methods (configurable)
-- Detects faces independently from general object detection
-- Suitable for access control, monitoring, and human–robot interaction
+- **Object Detection** — YOLOv8 real-time detection (person, vehicle, etc.)
+- **Face Recognition** — FaceNet with multi-frame aggregation for accuracy
+- **License Plate Recognition (ANPR)** — EasyOCR with optional YOLO plate detection model
+- **Multi-Camera** — manage multiple RTSP/IP cameras from one dashboard
+- **Web Dashboard** — live MJPEG stream, analytics, event browser, notifications
+- **Face Enrollment** — upload photos with auto-crop face detection
+- **Plate Watchlist** — alert on specific license plates
+- **Smart Logging** — per-detection cooldown, no event spam
+- **Notifications** — browser notifications, sound alerts, toast popups
+- **Multi-User RBAC** — admin, operator, viewer roles
+- **Settings Management** — runtime-configurable from dashboard
+- **Event Export** — CSV/JSON download with filters
+- **Health Monitoring** — `/api/health` endpoint for uptime checks
+- **Docker Support** — single command deployment
 
 ---
 
-## 📷 Camera Support
+## Quick Start
 
-### Default
-- Raspberry Pi Camera (CSI)
+### Option 1: Direct Install (Recommended for Pi)
 
-### Easily Adaptable To
-- USB webcams
-- IP / RTSP cameras
-- Industrial cameras
-- Video files (for testing)
+**Windows:**
+```bash
+git clone https://github.com/robomixes/ai-camera.git
+cd ai-camera
+setup.bat
+venv\Scripts\activate
+python run_web.py
+```
 
-> Only the camera capture layer needs modification.  
-> AI inference and processing logic remain unchanged.
+**Linux / Raspberry Pi:**
+```bash
+git clone https://github.com/robomixes/ai-camera.git
+cd ai-camera
+chmod +x setup.sh
+./setup.sh
+source venv/bin/activate
+python run_web.py
+```
 
----
-
-## 🏗 Architecture Overview
-
-### High-Level Pipeline
-- Camera Source
-       ↓
-- Capture Layer
-       ↓
-- Pre-Processing
-↓
-- AI Inference
-↓
-- Logic & Filtering
-↓
-- Output / Database
-
----
-
-## ⚙️ Requirements
-
-- All needed requirments are availabe in requirements.txt
-- This document will explain the setup setp by step: docs/setup.txt
-- This document will explain the auto service setup on the pi: docs/service-auto-creation.txt
----
-
-## 🔧 Installation
+### Option 2: Docker
 
 ```bash
 git clone https://github.com/robomixes/ai-camera.git
 cd ai-camera
 
-▶️ Usage
-python camera_app.py
-OR
-run_main.sh
+# Configure camera (edit .env or docker-compose.yml)
+export RTSP_URL="rtsp://admin:password@192.168.1.9/h264Preview_01_sub"
 
-
-Ensure:
-
-Camera is connected and enabled
-
-Required Python dependencies are installed
-
-🔄 Using a Different Camera
-
-To use a USB or IP camera, modify the camera initialization section in camera_app.py.
-
-Example using OpenCV:
-
-import cv2
-cap = cv2.VideoCapture(0)
-
-No changes are required in:
-
-AI models
-
-Detection logic
-
-ROI configuration
-
-Database handling
-
+docker-compose up -d
 ```
 
-## Menu
+### Access Dashboard
 
-![camera-api-1](assets/camera-api-1.png)
+Open **http://localhost:8080**
 
+Default login: `admin` / `admin` (change immediately)
 
-## settings
+---
 
-<img width="903" height="511" alt="camera-api-2" src="https://github.com/user-attachments/assets/20461cd3-ddbb-47cd-8960-c385cd1b6fc0" />
+## Configuration
 
+### Camera Setup
 
+**Single camera** — edit `config.py`:
+```python
+CAMERA_TYPE = "rtsp"
+RTSP_URL = "rtsp://admin:password@192.168.1.9/h264Preview_01_sub"
+```
+
+**Multiple cameras** — configure from Dashboard > Parameters > Camera Management, or edit `config.py`:
+```python
+CAMERAS = [
+    {"id": "CAM_001", "description": "Front Gate", "type": "rtsp",
+     "url": "rtsp://admin:pass@192.168.1.9/h264Preview_01_sub",
+     "ai_mode": "both"},
+    {"id": "CAM_002", "description": "Back Door", "type": "rtsp",
+     "url": "rtsp://admin:pass@192.168.1.10/h264Preview_01_sub",
+     "ai_mode": "yolo"},
+]
+```
+
+### Environment Variables (Docker)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CAMERA_TYPE` | `auto` | `auto`, `rtsp`, or `picamera` |
+| `RTSP_URL` | `` | RTSP stream URL |
+| `WEB_PORT` | `8080` | Dashboard port |
+| `DEFAULT_AI_MODE` | `yolo` | `yolo`, `facenet`, or `both` |
+| `ANPR_ENABLED` | `false` | Enable plate recognition |
+| `STREAM_TARGET_FPS` | `10` | Web stream FPS |
+
+### Runtime Settings
+
+All settings configurable from Dashboard > Parameters > Runtime Settings:
+- Detection classes, thresholds, cooldowns
+- Stream quality (FPS, resolution, JPEG quality)
+- Face recognition thresholds
+- ANPR settings
+- Alert configuration
+- Data retention policy
+
+---
+
+## AI Modes
+
+| Mode | Description | Use Case |
+|------|-------------|----------|
+| **YOLO** | Object detection only | General surveillance |
+| **FaceNet** | Face recognition only | Access control |
+| **Both** | YOLO + FaceNet combined | Full security |
+
+**ANPR** runs as a toggle alongside any mode — auto-adds vehicle classes to YOLO when enabled.
+
+---
+
+## User Roles
+
+| Role | Stream | Events | Faces/Plates | Settings | Users |
+|------|:------:|:------:|:------------:|:--------:|:-----:|
+| Admin | Yes | Yes | Yes | Yes | Yes |
+| Operator | Yes | Yes | Yes | No | No |
+| Viewer | Yes | Yes | No | No | No |
+
+---
+
+## API Documentation
+
+Interactive Swagger docs available at `/docs` (requires login).
+
+Key endpoints:
+- `GET /stream` — MJPEG live stream
+- `GET /stream/events` — SSE detection events
+- `GET /api/health` — health check (public)
+- `GET /api/events` — query events
+- `GET /api/events/export` — download CSV/JSON
+- `POST /api/faces/enroll` — enroll face
+- `GET /api/plates/watchlist` — plate watchlist
+- `POST /api/ai/mode` — switch AI mode
+
+---
+
+## Architecture
+
+```
+Camera (RTSP/Picamera) → Frame Buffer → AI Runner → Web Dashboard
+                                            |
+                                    YOLO + FaceNet + ANPR
+                                            |
+                                    SQLite Events DB
+                                            |
+                                    Alerts + Notifications
+```
+
+---
+
+## Requirements
+
+- Python 3.11+
+- OpenCV, NumPy, Ultralytics (YOLOv8)
+- FastAPI, Uvicorn
+- EasyOCR (for ANPR)
+- TensorFlow Lite (for FaceNet, Pi only)
+- Bcrypt (authentication)
+
+---
+
+## Raspberry Pi Notes
+
+- Use sub-stream (`h264Preview_01_sub`) for lower resolution/bandwidth
+- Set `STREAM_TARGET_FPS=5` and `STREAM_MAX_WIDTH=640` for Pi performance
+- Install Pi-specific deps: `pip install -r requirements-pi.txt`
+- FaceNet uses TFLite for efficient ARM inference
+- "Both" mode is slower — use YOLO or FaceNet individually on Pi
+
+---
+
+## License
+
+Open source. See repository for details.

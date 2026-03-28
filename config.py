@@ -138,5 +138,31 @@ CAMERAS = []
 #      "latitude": 48.8585, "longitude": 2.2946, "ai_mode": "yolo"},
 # ]
 
-# --- Load any persisted runtime overrides (must be last) ---
+# --- Load overrides (file-based, then env vars) ---
 _load_overrides()
+
+# Environment variable overrides (highest priority, for Docker)
+_ENV_MAP = {
+    "CAMERA_TYPE": ("CAMERA_TYPE", str),
+    "RTSP_URL": ("RTSP_URL", str),
+    "RTSP_TRANSPORT": ("RTSP_TRANSPORT", str),
+    "CAMERA_ID": ("CAMERA_ID", str),
+    "CAMERA_DESCRIPTION": ("CAMERA_DESCRIPTION", str),
+    "WEB_HOST": ("WEB_HOST", str),
+    "WEB_PORT": ("WEB_PORT", int),
+    "FRAME_WIDTH": ("FRAME_WIDTH", int),
+    "FRAME_HEIGHT": ("FRAME_HEIGHT", int),
+    "STREAM_TARGET_FPS": ("STREAM_TARGET_FPS", int),
+    "STREAM_MAX_WIDTH": ("STREAM_MAX_WIDTH", int),
+    "STREAM_JPEG_QUALITY": ("STREAM_JPEG_QUALITY", int),
+    "DEFAULT_AI_MODE": ("DEFAULT_AI_MODE", str),
+    "ANPR_ENABLED": ("ANPR_ENABLED", lambda v: v.lower() in ("true", "1", "yes")),
+}
+
+for _env_key, (_config_key, _cast) in _ENV_MAP.items():
+    _env_val = os.getenv(_env_key)
+    if _env_val is not None:
+        try:
+            globals()[_config_key] = _cast(_env_val)
+        except (ValueError, TypeError):
+            pass
