@@ -113,6 +113,7 @@ ANPR_FRAME_INTERVAL = 5          # Run OCR every N frames
 ANPR_MIN_VEHICLE_WIDTH = 100     # Min vehicle bbox width (px) before attempting OCR
 ANPR_PLATE_COOLDOWN_SECONDS = 30 # Don't re-log same plate for this many seconds
 ANPR_VEHICLE_CLASSES = ["car", "truck", "bus", "motorcycle"]
+ANPR_PLATE_MODEL_PATH = "yolov8n-plate.pt"  # Optional: dedicated plate detection model
 PLATE_IMAGE_DIR = "plate_images"
 
 # --- Alerts ---
