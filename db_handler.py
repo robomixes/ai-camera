@@ -1,8 +1,11 @@
 # db_handler.py - Handles SQLite logging with GPS, Camera ID, and Configurable Paths
 
+import logging
 import sqlite3
 import os
-import config  # Pulls DB_NAME, EVENT_IMAGE_DIR, CAMERA_ID, and GPS info
+import config
+
+logger = logging.getLogger(__name__)
 
 def initialize_db():
     """Creates the SQLite database and tables based on paths in config.py."""
@@ -10,12 +13,12 @@ def initialize_db():
     # Ensure the event image directory exists
     if not os.path.exists(config.EVENT_IMAGE_DIR):
         os.makedirs(config.EVENT_IMAGE_DIR)
-        print(f"Created directory: {config.EVENT_IMAGE_DIR}")
+        logger.info(f"Created directory: {config.EVENT_IMAGE_DIR}")
 
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
     
-    print(f"Initializing database: {config.DB_NAME}")
+    logger.info(f"Initializing database: {config.DB_NAME}")
 
     # 1. Table for General YOLO Detections
     cursor.execute('''
@@ -47,27 +50,73 @@ def initialize_db():
         )
     ''')
     
+    # 3. Table for Plate Events
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS plate_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            camera_id TEXT,
+            latitude REAL,
+            longitude REAL,
+            plate_text TEXT NOT NULL,
+            vehicle_type TEXT,
+            confidence REAL,
+            image_path TEXT,
+            is_watchlist INTEGER DEFAULT 0,
+            watchlist_id INTEGER
+        )
+    ''')
+
+    # 4. Plate Watchlist
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS plate_watchlist (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            plate_number TEXT NOT NULL UNIQUE,
+            label TEXT DEFAULT '',
+            notes TEXT DEFAULT '',
+            alert_enabled INTEGER DEFAULT 1,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    # Indexes for query performance
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_det_timestamp ON detections(timestamp)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_det_camera ON detections(camera_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_det_type ON detections(object_type)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_face_timestamp ON face_events(timestamp)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_face_camera ON face_events(camera_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_face_known ON face_events(is_known)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_face_person ON face_events(person_name)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_plate_timestamp ON plate_events(timestamp)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_plate_camera ON plate_events(camera_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_plate_text ON plate_events(plate_text)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_plate_watchlist ON plate_events(is_watchlist)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pwl_plate ON plate_watchlist(plate_number)")
+
     conn.commit()
     conn.close()
-    print("Database tables verified.")
+    logger.info("Database tables and indexes verified.")
 
-def log_detection(detection_data, roi_area, image_filename):
-    """Logs general object detections using config-defined paths and ID."""
+def log_detection(detection_data, roi_area, image_filename, camera_id="", latitude=None, longitude=None):
+    """Logs general object detections."""
+    cam_id = camera_id or config.CAMERA_ID
+    lat = latitude if latitude is not None else config.GPS_LATITUDE
+    lon = longitude if longitude is not None else config.GPS_LONGITUDE
     try:
         conn = sqlite3.connect(config.DB_NAME)
         cursor = conn.cursor()
-        
+
         for obj in detection_data:
             cursor.execute('''
                 INSERT INTO detections (
-                    camera_id, latitude, longitude, object_type, 
+                    camera_id, latitude, longitude, object_type,
                     confidence, roi_box, image_path
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             ''', (
-                config.CAMERA_ID, 
-                config.GPS_LATITUDE, 
-                config.GPS_LONGITUDE,
+                cam_id,
+                lat,
+                lon,
                 obj['class'], 
                 obj['confidence'], 
                 str(roi_area), 
@@ -77,26 +126,29 @@ def log_detection(detection_data, roi_area, image_filename):
         conn.commit()
         conn.close()
     except Exception as e:
-        print(f"Error logging detection to DB: {e}")
+        logger.error(f"Error logging detection to DB: {e}")
 
-def log_face_detection_event(name, distance, image_filename, is_known):
-    """Logs a Face Recognition event using config-defined paths and ID."""
+def log_face_detection_event(name, distance, image_filename, is_known, camera_id="", latitude=None, longitude=None):
+    """Logs a Face Recognition event."""
+    cam_id = camera_id or config.CAMERA_ID
+    lat = latitude if latitude is not None else config.GPS_LATITUDE
+    lon = longitude if longitude is not None else config.GPS_LONGITUDE
     try:
         conn = sqlite3.connect(config.DB_NAME)
         cursor = conn.cursor()
-        
+
         distance_text = f"{distance:.4f}"
-                
+
         cursor.execute('''
             INSERT INTO face_events (
-                camera_id, latitude, longitude, person_name, 
+                camera_id, latitude, longitude, person_name,
                 distance, image_path, is_known
             )
             VALUES (?, ?, ?, ?, ?, ?, ?)
         ''', (
-            config.CAMERA_ID, 
-            config.GPS_LATITUDE, 
-            config.GPS_LONGITUDE,
+            cam_id,
+            lat,
+            lon,
             name, 
             distance_text, 
             image_filename, 
@@ -105,9 +157,494 @@ def log_face_detection_event(name, distance, image_filename, is_known):
         
         conn.commit()
         conn.close()
-        print(f"Logged Face Event: {name} from {config.CAMERA_ID}")
+        logger.info(f"Logged Face Event: {name} from {config.CAMERA_ID}")
     except Exception as e:
-        print(f"Error logging face event to DB: {e}")
+        logger.error(f"Error logging face event to DB: {e}")
+
+def _build_date_clause(date_from: str, date_to: str) -> tuple[str, list]:
+    """Build SQL WHERE clause for date filtering."""
+    clauses = []
+    params = []
+    if date_from:
+        clauses.append("timestamp >= ?")
+        params.append(f"{date_from} 00:00:00")
+    if date_to:
+        clauses.append("timestamp <= ?")
+        params.append(f"{date_to} 23:59:59")
+    where = (" AND " + " AND ".join(clauses)) if clauses else ""
+    return where, params
+
+
+def get_recent_events(limit: int = 50, event_type: str = "all", offset: int = 0,
+                      date_from: str = "", date_to: str = "", camera_id: str = "") -> list:
+    """Query recent detection and face events for the web dashboard."""
+    events = []
+    date_where, date_params = _build_date_clause(date_from, date_to)
+    cam_where = ""
+    cam_params = []
+    if camera_id:
+        cam_where = " AND camera_id = ?"
+        cam_params = [camera_id]
+    try:
+        conn = sqlite3.connect(config.DB_NAME)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        if event_type in ("all", "detection"):
+            cursor.execute(
+                "SELECT id, timestamp, camera_id, object_type, confidence, image_path, "
+                f"'detection' as event_type FROM detections WHERE 1=1{date_where}{cam_where} ORDER BY timestamp DESC",
+                date_params + cam_params
+            )
+            for row in cursor.fetchall():
+                events.append(dict(row))
+
+        if event_type in ("all", "face"):
+            cursor.execute(
+                "SELECT id, timestamp, camera_id, person_name, distance, image_path, is_known, "
+                f"'face' as event_type FROM face_events WHERE 1=1{date_where}{cam_where} ORDER BY timestamp DESC",
+                date_params + cam_params
+            )
+            for row in cursor.fetchall():
+                events.append(dict(row))
+
+        if event_type in ("all", "plate"):
+            cursor.execute(
+                "SELECT id, timestamp, camera_id, plate_text, vehicle_type, confidence, image_path, is_watchlist, "
+                f"'plate' as event_type FROM plate_events WHERE 1=1{date_where}{cam_where} ORDER BY timestamp DESC",
+                date_params + cam_params
+            )
+            for row in cursor.fetchall():
+                events.append(dict(row))
+
+        conn.close()
+
+        # Sort combined results by timestamp descending
+        events.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+        return events[offset:offset + limit]
+
+    except Exception as e:
+        logger.error(f"Error querying events: {e}")
+        return []
+
+
+def get_event_count(event_type: str = "all", date_from: str = "", date_to: str = "", camera_id: str = "") -> int:
+    """Get total count of events."""
+    total = 0
+    date_where, date_params = _build_date_clause(date_from, date_to)
+    cam_where = ""
+    cam_params = []
+    if camera_id:
+        cam_where = " AND camera_id = ?"
+        cam_params = [camera_id]
+    try:
+        conn = sqlite3.connect(config.DB_NAME)
+        cursor = conn.cursor()
+
+        if event_type in ("all", "detection"):
+            cursor.execute(f"SELECT COUNT(*) FROM detections WHERE 1=1{date_where}{cam_where}", date_params + cam_params)
+            total += cursor.fetchone()[0]
+
+        if event_type in ("all", "face"):
+            cursor.execute(f"SELECT COUNT(*) FROM face_events WHERE 1=1{date_where}{cam_where}", date_params + cam_params)
+            total += cursor.fetchone()[0]
+
+        if event_type in ("all", "plate"):
+            cursor.execute(f"SELECT COUNT(*) FROM plate_events WHERE 1=1{date_where}{cam_where}", date_params + cam_params)
+            total += cursor.fetchone()[0]
+
+        conn.close()
+    except Exception as e:
+        logger.error(f"Error counting events: {e}")
+    return total
+
+
+def delete_all_events(event_type: str = "all", date_from: str = "", date_to: str = "", camera_id: str = "") -> int:
+    """Delete events in bulk, optionally filtered by type, date range, and camera. Also removes image files."""
+    deleted = 0
+    date_where, date_params = _build_date_clause(date_from, date_to)
+    cam_where = ""
+    cam_params = []
+    if camera_id:
+        cam_where = " AND camera_id = ?"
+        cam_params = [camera_id]
+    all_params = date_params + cam_params
+    try:
+        conn = sqlite3.connect(config.DB_NAME)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        if event_type in ("all", "detection"):
+            cursor.execute(f"SELECT image_path FROM detections WHERE 1=1{date_where}{cam_where}", all_params)
+            for row in cursor.fetchall():
+                _delete_image_file(row["image_path"], config.ROI_OUTPUT_DIR)
+            cursor.execute(f"DELETE FROM detections WHERE 1=1{date_where}{cam_where}", all_params)
+            deleted += cursor.rowcount
+
+        if event_type in ("all", "face"):
+            cursor.execute(f"SELECT image_path FROM face_events WHERE 1=1{date_where}{cam_where}", all_params)
+            for row in cursor.fetchall():
+                _delete_image_file(row["image_path"], config.EVENT_IMAGE_DIR)
+            cursor.execute(f"DELETE FROM face_events WHERE 1=1{date_where}{cam_where}", all_params)
+            deleted += cursor.rowcount
+
+        if event_type in ("all", "plate"):
+            cursor.execute(f"SELECT image_path FROM plate_events WHERE 1=1{date_where}{cam_where}", all_params)
+            for row in cursor.fetchall():
+                _delete_image_file(row["image_path"], getattr(config, "PLATE_IMAGE_DIR", "plate_images"))
+            cursor.execute(f"DELETE FROM plate_events WHERE 1=1{date_where}{cam_where}", all_params)
+            deleted += cursor.rowcount
+
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Error bulk deleting events: {e}")
+    return deleted
+
+
+def _delete_image_file(image_path, base_dir):
+    """Safely delete an event image file."""
+    if not image_path:
+        return
+    try:
+        full_path = os.path.join(base_dir, image_path)
+        if os.path.exists(full_path):
+            os.remove(full_path)
+    except Exception:
+        pass
+
+
+def delete_events(ids: list) -> int:
+    """Delete events by their composite ids (type_id format, e.g. 'detection_5', 'face_12'). Also removes image files."""
+    deleted = 0
+    try:
+        conn = sqlite3.connect(config.DB_NAME)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        det_ids = []
+        face_ids = []
+        plate_ids = []
+        for eid in ids:
+            parts = str(eid).split("_", 1)
+            if len(parts) == 2:
+                if parts[0] == "detection":
+                    det_ids.append(int(parts[1]))
+                elif parts[0] == "face":
+                    face_ids.append(int(parts[1]))
+                elif parts[0] == "plate":
+                    plate_ids.append(int(parts[1]))
+
+        if det_ids:
+            placeholders = ",".join("?" * len(det_ids))
+            cursor.execute(f"SELECT image_path FROM detections WHERE id IN ({placeholders})", det_ids)
+            for row in cursor.fetchall():
+                _delete_image_file(row["image_path"], config.ROI_OUTPUT_DIR)
+            cursor.execute(f"DELETE FROM detections WHERE id IN ({placeholders})", det_ids)
+            deleted += cursor.rowcount
+
+        if face_ids:
+            placeholders = ",".join("?" * len(face_ids))
+            cursor.execute(f"SELECT image_path FROM face_events WHERE id IN ({placeholders})", face_ids)
+            for row in cursor.fetchall():
+                _delete_image_file(row["image_path"], config.EVENT_IMAGE_DIR)
+            cursor.execute(f"DELETE FROM face_events WHERE id IN ({placeholders})", face_ids)
+            deleted += cursor.rowcount
+
+        if plate_ids:
+            placeholders = ",".join("?" * len(plate_ids))
+            cursor.execute(f"SELECT image_path FROM plate_events WHERE id IN ({placeholders})", plate_ids)
+            for row in cursor.fetchall():
+                _delete_image_file(row["image_path"], getattr(config, "PLATE_IMAGE_DIR", "plate_images"))
+            cursor.execute(f"DELETE FROM plate_events WHERE id IN ({placeholders})", plate_ids)
+            deleted += cursor.rowcount
+
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Error deleting events: {e}")
+    return deleted
+
+
+def get_today_stats() -> dict:
+    """Get detection counts for today."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    stats = {"total_detections": 0, "total_faces": 0, "persons": 0, "known_faces": 0, "unknown_faces": 0,
+             "total_plates": 0, "watchlist_hits": 0}
+    try:
+        conn = sqlite3.connect(config.DB_NAME)
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT COUNT(*) FROM detections WHERE timestamp >= ?", (f"{today} 00:00:00",))
+        stats["total_detections"] = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM detections WHERE timestamp >= ? AND object_type = 'person'",
+                       (f"{today} 00:00:00",))
+        stats["persons"] = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM face_events WHERE timestamp >= ?", (f"{today} 00:00:00",))
+        stats["total_faces"] = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM face_events WHERE timestamp >= ? AND is_known = 1",
+                       (f"{today} 00:00:00",))
+        stats["known_faces"] = cursor.fetchone()[0]
+
+        stats["unknown_faces"] = stats["total_faces"] - stats["known_faces"]
+
+        cursor.execute("SELECT COUNT(*) FROM plate_events WHERE timestamp >= ?", (f"{today} 00:00:00",))
+        stats["total_plates"] = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM plate_events WHERE timestamp >= ? AND is_watchlist = 1",
+                       (f"{today} 00:00:00",))
+        stats["watchlist_hits"] = cursor.fetchone()[0]
+
+        conn.close()
+    except Exception as e:
+        logger.error(f"Error getting today stats: {e}")
+    return stats
+
+
+def get_hourly_activity(hours: int = 24) -> list:
+    """Get detection counts per hour for the last N hours."""
+    from datetime import datetime, timedelta
+    activity = []
+    try:
+        conn = sqlite3.connect(config.DB_NAME)
+        cursor = conn.cursor()
+
+        now = datetime.now()
+        for i in range(hours - 1, -1, -1):
+            hour_start = (now - timedelta(hours=i)).replace(minute=0, second=0, microsecond=0)
+            hour_end = hour_start + timedelta(hours=1)
+            start_str = hour_start.strftime("%Y-%m-%d %H:%M:%S")
+            end_str = hour_end.strftime("%Y-%m-%d %H:%M:%S")
+
+            cursor.execute("SELECT COUNT(*) FROM detections WHERE timestamp >= ? AND timestamp < ?",
+                           (start_str, end_str))
+            det_count = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM face_events WHERE timestamp >= ? AND timestamp < ?",
+                           (start_str, end_str))
+            face_count = cursor.fetchone()[0]
+
+            activity.append({
+                "hour": hour_start.strftime("%H:%M"),
+                "detections": det_count,
+                "faces": face_count,
+            })
+
+        conn.close()
+    except Exception as e:
+        logger.error(f"Error getting hourly activity: {e}")
+    return activity
+
+
+def get_top_objects(limit: int = 10) -> list:
+    """Get most frequently detected object classes today."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    objects = []
+    try:
+        conn = sqlite3.connect(config.DB_NAME)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "SELECT object_type, COUNT(*) as cnt FROM detections "
+            "WHERE timestamp >= ? GROUP BY object_type ORDER BY cnt DESC LIMIT ?",
+            (f"{today} 00:00:00", limit)
+        )
+        for row in cursor.fetchall():
+            objects.append({"label": row[0], "count": row[1]})
+
+        conn.close()
+    except Exception as e:
+        logger.error(f"Error getting top objects: {e}")
+    return objects
+
+
+# need datetime import at module level
+from datetime import datetime, timedelta
+
+
+def cleanup_old_data(retention_days: int = 0) -> int:
+    """Delete events and images older than retention_days. Returns total deleted."""
+    if retention_days <= 0:
+        return 0
+
+    cutoff = (datetime.now() - timedelta(days=retention_days)).strftime("%Y-%m-%d %H:%M:%S")
+    deleted = 0
+
+    try:
+        conn = sqlite3.connect(config.DB_NAME)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        # Delete old detection events + images
+        cursor.execute("SELECT image_path FROM detections WHERE timestamp < ?", (cutoff,))
+        for row in cursor.fetchall():
+            _delete_image_file(row["image_path"], config.ROI_OUTPUT_DIR)
+        cursor.execute("DELETE FROM detections WHERE timestamp < ?", (cutoff,))
+        deleted += cursor.rowcount
+
+        # Delete old face events + images
+        cursor.execute("SELECT image_path FROM face_events WHERE timestamp < ?", (cutoff,))
+        for row in cursor.fetchall():
+            _delete_image_file(row["image_path"], config.EVENT_IMAGE_DIR)
+        cursor.execute("DELETE FROM face_events WHERE timestamp < ?", (cutoff,))
+        deleted += cursor.rowcount
+
+        conn.commit()
+        conn.close()
+
+        if deleted > 0:
+            logger.info(f"Data retention cleanup: deleted {deleted} events older than {retention_days} days")
+    except Exception as e:
+        logger.error(f"Error during retention cleanup: {e}")
+
+    return deleted
+
+
+def log_plate_event(plate_text, vehicle_type, confidence, image_filename,
+                    is_watchlist=False, watchlist_id=None, camera_id="", latitude=None, longitude=None):
+    """Log a license plate detection event."""
+    cam_id = camera_id or config.CAMERA_ID
+    lat = latitude if latitude is not None else config.GPS_LATITUDE
+    lon = longitude if longitude is not None else config.GPS_LONGITUDE
+    try:
+        conn = sqlite3.connect(config.DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO plate_events (
+                camera_id, latitude, longitude, plate_text, vehicle_type,
+                confidence, image_path, is_watchlist, watchlist_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (cam_id, lat, lon, plate_text, vehicle_type, confidence,
+              image_filename, 1 if is_watchlist else 0, watchlist_id))
+        conn.commit()
+        conn.close()
+        logger.info(f"Logged Plate Event: {plate_text} from {cam_id}")
+    except Exception as e:
+        logger.error(f"Error logging plate event: {e}")
+
+
+def get_plate_watchlist() -> list:
+    """Get all plate watchlist entries."""
+    try:
+        conn = sqlite3.connect(config.DB_NAME)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM plate_watchlist ORDER BY created_at DESC")
+        result = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return result
+    except Exception as e:
+        logger.error(f"Error getting plate watchlist: {e}")
+        return []
+
+
+def add_plate_watchlist(plate_number: str, label: str = "", notes: str = "") -> dict:
+    """Add a plate to the watchlist. Returns the new entry or error."""
+    plate_number = plate_number.upper().strip()
+    try:
+        conn = sqlite3.connect(config.DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO plate_watchlist (plate_number, label, notes) VALUES (?, ?, ?)",
+            (plate_number, label, notes)
+        )
+        new_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return {"id": new_id, "plate_number": plate_number, "label": label, "notes": notes}
+    except sqlite3.IntegrityError:
+        return {"error": f"Plate '{plate_number}' already in watchlist"}
+    except Exception as e:
+        logger.error(f"Error adding plate to watchlist: {e}")
+        return {"error": str(e)}
+
+
+def remove_plate_watchlist(plate_id: int) -> bool:
+    """Remove a plate from the watchlist by ID."""
+    try:
+        conn = sqlite3.connect(config.DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM plate_watchlist WHERE id = ?", (plate_id,))
+        deleted = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return deleted
+    except Exception as e:
+        logger.error(f"Error removing plate from watchlist: {e}")
+        return False
+
+
+def check_plate_watchlist(plate_text: str) -> dict | None:
+    """Check if a plate matches any watchlist entry (case-insensitive, stripped)."""
+    plate_text = plate_text.upper().strip()
+    try:
+        conn = sqlite3.connect(config.DB_NAME)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM plate_watchlist WHERE UPPER(REPLACE(plate_number, ' ', '')) = ? AND alert_enabled = 1",
+            (plate_text.replace(" ", ""),)
+        )
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+    except Exception as e:
+        logger.error(f"Error checking plate watchlist: {e}")
+        return None
+
+
+def export_events(event_type: str = "all", date_from: str = "", date_to: str = "",
+                   camera_id: str = "") -> list[dict]:
+    """Export all events matching filters (no pagination). Returns list of dicts."""
+    events = []
+    date_where, date_params = _build_date_clause(date_from, date_to)
+    cam_where = ""
+    cam_params = []
+    if camera_id:
+        cam_where = " AND camera_id = ?"
+        cam_params = [camera_id]
+    all_params = date_params + cam_params
+    try:
+        conn = sqlite3.connect(config.DB_NAME)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        if event_type in ("all", "detection"):
+            cursor.execute(
+                "SELECT timestamp, camera_id, object_type, confidence, image_path, "
+                f"'detection' as event_type FROM detections WHERE 1=1{date_where}{cam_where} ORDER BY timestamp DESC",
+                all_params
+            )
+            for row in cursor.fetchall():
+                events.append(dict(row))
+
+        if event_type in ("all", "face"):
+            cursor.execute(
+                "SELECT timestamp, camera_id, person_name, distance, is_known, image_path, "
+                f"'face' as event_type FROM face_events WHERE 1=1{date_where}{cam_where} ORDER BY timestamp DESC",
+                all_params
+            )
+            for row in cursor.fetchall():
+                events.append(dict(row))
+
+        if event_type in ("all", "plate"):
+            cursor.execute(
+                "SELECT timestamp, camera_id, plate_text, vehicle_type, confidence, image_path, is_watchlist, "
+                f"'plate' as event_type FROM plate_events WHERE 1=1{date_where}{cam_where} ORDER BY timestamp DESC",
+                all_params
+            )
+            for row in cursor.fetchall():
+                events.append(dict(row))
+
+        conn.close()
+        events.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    except Exception as e:
+        logger.error(f"Error exporting events: {e}")
+    return events
+
 
 # Run initialization if script is executed directly
 if __name__ == "__main__":

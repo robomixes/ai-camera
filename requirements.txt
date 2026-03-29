@@ -1,28 +1,17 @@
-# --- Core System & Hardware ---
-# Official library for Raspberry Pi Camera Module 2/3 and HQ Camera
-picamera2
+# --- Core ---
+opencv-python>=4.11
+numpy>=1.26
+ultralytics>=8.4
 
-# --- Computer Vision & AI Backend ---
-# OpenCV (cv2) for image processing, drawing, and video handling
-opencv-python
+# --- Face Recognition ---
+tensorflow>=2.14
 
-# NumPy for efficient array and numerical computations (essential for CV/AI)
-numpy
+# --- ANPR ---
+easyocr>=1.7
 
-# TensorFlow Lite Runtime for executing the FaceNet TFLite model
-# NOTE: The version must match your Python version and architecture (e.g., Python 3.9 on RPi)
-# You may need to replace this with a specific wheel file if this generic name fails.
-# The tflite-runtime wheel must be installed after all others.
-tflite-runtime==2.14.0 # Or use the specific version compatible with your OS/Python
-
-# --- AI Detection (Assuming YOLOv8 based on previous code snippets) ---
-# Install the Ultralytics library for high-performance AI models
-# If you are only running a TFLite model, you might not need this.
-ultralytics
-
-# --- Database / Helper Packages ---
-# If you are using a standard Python database for logging (e.g., sqlite3, which is built-in)
-# You don't need to list it here unless you are using a third-party DB like SQLAlchemy or peewee.
-
-# Input handling for the timed menu (optional, often built-in on Linux, but safe to list)
-# The 'select' module is a standard library, so no extra package is typically needed.
+# --- Web ---
+fastapi>=0.135
+uvicorn[standard]>=0.42
+sse-starlette>=3.3
+python-multipart>=0.0.22
+bcrypt>=5.0

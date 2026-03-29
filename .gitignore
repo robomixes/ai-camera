@@ -361,3 +361,28 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# --- AI Camera project ignores ---
+# Virtual environment
+venv/
+
+# Archive (legacy files)
+archive/
+
+# Logs
+logs/
+
+# Runtime data (images, videos, database, settings overrides)
+config_overrides.json
+auth.json
+event_images/
+roi_events/
+plate_images/
+output_images/
+recorded/
+*.db
+
+# Captured snapshots and face images (user data, not code)
+people_search_queue/*.jpg
+people_search_queue/ready/*.jpg
+people_search_queue/ready/known_faces.json

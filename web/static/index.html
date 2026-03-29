@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Camera Dashboard</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <!-- Header -->
+    <header>
+        <div class="header-left">
+            <h1>AI Camera</h1>
+            <span id="camera-info" class="header-info">-</span>
+        </div>
+        <div id="camera-selector" class="camera-selector" style="display:none">
+            <select id="camera-select" onchange="switchCamera(this.value)"></select>
+        </div>
+        <nav class="tab-nav">
+            <button class="tab-btn active" data-tab="home">Home</button>
+            <button class="tab-btn" data-tab="live">Live</button>
+            <button class="tab-btn" data-tab="events">Events <span id="events-badge" class="tab-badge">0</span></button>
+            <button class="tab-btn" data-tab="faces">Faces</button>
+            <button class="tab-btn" data-tab="plates">Plates</button>
+            <div class="tab-dropdown admin-only" style="display:none">
+                <button class="tab-btn" onclick="toggleParamsMenu()">Parameters &#9662;</button>
+                <div id="params-menu" class="params-menu">
+                    <button data-tab="settings" onclick="switchTab('settings'); closeParamsMenu()">Runtime Settings</button>
+                    <button data-tab="cameras-tab" onclick="switchTab('cameras-tab'); closeParamsMenu()">Camera Management</button>
+                    <button data-tab="users" onclick="switchTab('users'); closeParamsMenu()">User Management</button>
+                </div>
+            </div>
+        </nav>
+        <div class="header-right">
+            <!-- Notification Bell -->
+            <div class="notif-bell-wrap">
+                <button id="notif-bell" class="notif-bell" onclick="toggleNotifPanel()" title="Notifications">
+                    &#128276;
+                    <span id="notif-badge" class="notif-badge">0</span>
+                </button>
+                <div id="notif-panel" class="notif-panel">
+                    <div class="notif-panel-header">
+                        <span>Notifications</span>
+                        <button class="notif-clear" onclick="clearNotifHistory()">Clear</button>
+                    </div>
+                    <div class="notif-panel-settings">
+                        <label><input type="checkbox" id="notif-browser" onchange="saveNotifPrefs()"> Browser</label>
+                        <label><input type="checkbox" id="notif-sound" onchange="saveNotifPrefs()" checked> Sound</label>
+                        <label><input type="checkbox" id="notif-toast" onchange="saveNotifPrefs()" checked> Toast</label>
+                    </div>
+                    <div class="notif-panel-types">
+                        <span class="notif-types-label">Alert types:</span>
+                        <label><input type="checkbox" id="notif-person" onchange="saveNotifPrefs()" checked> Person</label>
+                        <label><input type="checkbox" id="notif-unknown-face" onchange="saveNotifPrefs()" checked> Unknown face</label>
+                        <label><input type="checkbox" id="notif-known-face" onchange="saveNotifPrefs()" checked> Known face</label>
+                    </div>
+                    <ul id="notif-list" class="notif-list">
+                        <li class="no-data">No alerts yet</li>
+                    </ul>
+                </div>
+            </div>
+            <span id="status-dot" class="status-dot disconnected"></span>
+            <span id="status-text">Connecting...</span>
+            <div class="user-menu-wrap">
+                <button id="user-info" class="user-info" onclick="toggleUserMenu()"></button>
+                <div id="user-menu" class="user-menu">
+                    <button onclick="showChangePassword()">Change Password</button>
+                    <button onclick="doLogout()">Logout</button>
+                </div>
+            </div>
+
+            <!-- Change Password Modal -->
+            <div id="pw-modal" class="pw-modal" style="display:none" onclick="if(event.target===this)this.style.display='none'">
+                <div class="pw-modal-content">
+                    <h3>Change Password</h3>
+                    <div class="enroll-field"><label>Current Password</label><input type="password" id="pw-old" autocomplete="current-password"></div>
+                    <div class="enroll-field"><label>New Password</label><input type="password" id="pw-new" autocomplete="new-password"></div>
+                    <div class="enroll-field"><label>Confirm Password</label><input type="password" id="pw-confirm" autocomplete="new-password"></div>
+                    <div style="display:flex; gap:10px; margin-top:12px; align-items:center;">
+                        <button class="btn-enroll" onclick="changePassword()">Change</button>
+                        <button class="btn-refresh" onclick="document.getElementById('pw-modal').style.display='none'">Cancel</button>
+                        <span id="pw-status" class="settings-status"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- ===== HOME TAB ===== -->
+    <div id="tab-home" class="tab-content active">
+        <div class="home-page">
+            <!-- Stat Cards Row -->
+            <div class="stat-cards-row">
+                <div class="stat-card">
+                    <div class="stat-card-icon" style="color: #00e676;">&#9678;</div>
+                    <div class="stat-card-data">
+                        <div class="stat-card-value" id="home-total-det">0</div>
+                        <div class="stat-card-label">Detections Today</div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-card-icon" style="color: #ffa726;">&#9823;</div>
+                    <div class="stat-card-data">
+                        <div class="stat-card-value" id="home-persons">0</div>
+                        <div class="stat-card-label">Persons</div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-card-icon" style="color: #00d4ff;">&#9786;</div>
+                    <div class="stat-card-data">
+                        <div class="stat-card-value" id="home-known">0</div>
+                        <div class="stat-card-label">Known Faces</div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-card-icon" style="color: #ff5252;">&#9888;</div>
+                    <div class="stat-card-data">
+                        <div class="stat-card-value" id="home-unknown">0</div>
+                        <div class="stat-card-label">Unknown Faces</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Charts Row -->
+            <div class="home-grid">
+                <!-- Hourly Activity Chart -->
+                <div class="card home-chart-card">
+                    <div class="card-header">Activity (Last 24h)</div>
+                    <div class="card-body">
+                        <canvas id="hourly-chart" height="200"></canvas>
+                    </div>
+                </div>
+
+                <!-- Right Column -->
+                <div class="home-side">
+                    <!-- Top Objects -->
+                    <div class="card">
+                        <div class="card-header">Top Detected Objects</div>
+                        <div class="card-body">
+                            <div id="home-top-objects" class="top-objects-list">
+                                <div class="no-data">Loading...</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Recent Alerts -->
+                    <div class="card">
+                        <div class="card-header">Recent Events</div>
+                        <div class="card-body">
+                            <div id="home-recent-events" class="recent-events-list">
+                                <div class="no-data">Loading...</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== LIVE TAB ===== -->
+    <div id="tab-live" class="tab-content">
+        <div class="container">
+            <!-- Video Panel -->
+            <div class="video-section">
+                <div class="video-panel">
+                    <img id="stream-img" src="/stream" alt="Live Stream">
+                <div id="no-signal" class="no-signal" style="display:none">
+                    <div class="no-signal-icon">&#9888;</div>
+                    <div class="no-signal-text">No Signal</div>
+                    <div class="no-signal-sub">Camera is not responding</div>
+                </div>
+                    <div class="video-overlay top-left">
+                        <span id="fps-badge" class="badge badge-fps">0 FPS</span>
+                    </div>
+                    <div class="video-overlay top-right">
+                        <span id="mode-indicator" class="mode-indicator mode-yolo">YOLO DETECTION</span>
+                    </div>
+                </div>
+
+                <!-- Mode bar removed — controls moved to sidebar -->
+            </div>
+
+            <!-- Sidebar -->
+            <div class="sidebar">
+                <!-- AI Mode Toggle -->
+                <div class="mode-toggle-card">
+                    <span class="mode-toggle-label">AI Mode</span>
+                    <div class="mode-toggle">
+                        <button id="btn-yolo" class="mode-seg active" onclick="setMode('yolo')" title="Object Detection">YOLO</button>
+                        <button id="btn-facenet" class="mode-seg" onclick="setMode('facenet')" title="Face Recognition">Face</button>
+                        <button id="btn-both" class="mode-seg" onclick="setMode('both')" title="YOLO + Face combined">Both</button>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span id="det-card-title">Object Detections</span>
+                        <span id="det-count" class="det-count">0</span>
+                    </div>
+                    <div class="card-body">
+                        <ul id="detection-list" class="detection-list">
+                            <li class="no-data">Waiting for stream...</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">Stream Info</div>
+                    <div class="card-body stats-grid">
+                        <div class="stat">
+                            <div class="stat-value" id="stat-fps">0</div>
+                            <div class="stat-label">FPS</div>
+                        </div>
+                        <div class="stat">
+                            <div class="stat-value" id="stat-mode">YOLO</div>
+                            <div class="stat-label">Mode</div>
+                        </div>
+                        <div class="stat">
+                            <div class="stat-value" id="stat-resolution">-</div>
+                            <div class="stat-label">Resolution</div>
+                        </div>
+                        <div class="stat">
+                            <div class="stat-value" id="stat-camera">-</div>
+                            <div class="stat-label">Source</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Recent Events (compact) -->
+                <div class="card">
+                    <div class="card-header">
+                        <span>Recent Events</span>
+                        <button class="btn-refresh" onclick="loadEvents()">Refresh</button>
+                    </div>
+                    <div class="card-body">
+                        <table class="event-table">
+                            <thead>
+                                <tr>
+                                    <th>Time</th>
+                                    <th>Type</th>
+                                    <th>Detail</th>
+                                    <th>Camera</th>
+                                </tr>
+                            </thead>
+                            <tbody id="event-tbody">
+                                <tr><td colspan="4" class="no-data">Loading...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== EVENTS TAB ===== -->
+    <div id="tab-events" class="tab-content">
+        <div class="events-page">
+            <!-- Filters -->
+            <div class="events-toolbar">
+                <div class="filter-group">
+                    <label>Type:</label>
+                    <button class="filter-btn active" data-filter="all">All</button>
+                    <button class="filter-btn" data-filter="detection">Detections</button>
+                    <button class="filter-btn" data-filter="face">Faces</button>
+                    <button class="filter-btn" data-filter="plate">Plates</button>
+                </div>
+                <div class="filter-group">
+                    <label>Camera:</label>
+                    <select id="filter-camera" class="date-input" onchange="applyCameraFilter()">
+                        <option value="">All Cameras</option>
+                    </select>
+                </div>
+                <div class="filter-group date-filter">
+                    <label>From:</label>
+                    <input type="date" id="filter-date-from" class="date-input" onchange="applyDateFilter()">
+                    <label>To:</label>
+                    <input type="date" id="filter-date-to" class="date-input" onchange="applyDateFilter()">
+                    <button class="btn-refresh" onclick="applyDateFilter()">Apply</button>
+                    <button class="btn-clear-date" onclick="clearDateFilter()">Clear</button>
+                </div>
+                <div class="events-controls">
+                    <label class="auto-refresh-toggle">
+                        <input type="checkbox" id="auto-refresh-check" checked>
+                        <span>Auto-refresh</span>
+                    </label>
+                    <button class="btn-refresh" onclick="loadEventsPage()">Refresh Now</button>
+                    <button class="btn-export" onclick="exportEvents('csv')">Export CSV</button>
+                    <button class="btn-export" onclick="exportEvents('json')">Export JSON</button>
+                </div>
+                <div class="events-page-info">
+                    <span id="events-showing">-</span>
+                    <button id="events-prev" class="btn-page" disabled>&larr; Prev</button>
+                    <button id="events-next" class="btn-page">Next &rarr;</button>
+                </div>
+            </div>
+
+            <!-- Bulk Actions Bar -->
+            <div class="bulk-actions-bar">
+                <button class="btn-bulk-delete" onclick="deleteAllFiltered()">Delete All Filtered</button>
+                <button class="btn-bulk-delete danger" onclick="deleteAllEvents()">Delete ALL Events</button>
+            </div>
+
+            <!-- Selection Bar -->
+            <div id="selection-bar" class="selection-bar">
+                <span><strong id="selected-count">0</strong> selected</span>
+                <button class="btn-select-all" onclick="selectAllEvents()">Select All</button>
+                <button class="btn-clear-sel" onclick="clearSelection()">Clear</button>
+                <button class="btn-delete" onclick="deleteSelected()">Delete Selected</button>
+            </div>
+
+            <!-- Events Grid -->
+            <div id="events-grid" class="events-grid">
+                <div class="no-data">Loading events...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== FACES TAB ===== -->
+    <div id="tab-faces" class="tab-content">
+        <div class="faces-page">
+            <!-- Enrollment Form -->
+            <div class="card enroll-card">
+                <div class="card-header">Enroll New Face</div>
+                <div class="card-body">
+                    <form id="enroll-form" class="enroll-form" onsubmit="enrollFace(event)">
+                        <div class="enroll-row">
+                            <div class="enroll-field">
+                                <label for="enroll-name">Person Name</label>
+                                <input type="text" id="enroll-name" placeholder="e.g. John" required>
+                            </div>
+                            <div class="enroll-field">
+                                <label for="enroll-files">Face Photos</label>
+                                <input type="file" id="enroll-files" accept="image/*" multiple required>
+                            </div>
+                            <label class="enroll-checkbox">
+                                <input type="checkbox" id="enroll-crop" checked>
+                                <span>Auto-crop faces</span>
+                            </label>
+                            <button type="submit" class="btn-enroll" id="btn-enroll">Enroll</button>
+                        </div>
+                        <div id="enroll-status" class="enroll-status"></div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- People Grid -->
+            <div class="faces-header">
+                <h3>Enrolled People</h3>
+                <button class="btn-refresh" onclick="loadFaces()">Refresh</button>
+            </div>
+            <div id="faces-grid" class="faces-grid">
+                <div class="no-data">Loading...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== PLATES TAB ===== -->
+    <div id="tab-plates" class="tab-content">
+        <div class="plates-page">
+            <!-- ANPR Toggle + Watchlist Add -->
+            <div class="plates-toolbar">
+                <label class="anpr-toggle">
+                    <input type="checkbox" id="anpr-toggle" onchange="toggleANPR(this.checked)">
+                    <span>ANPR Enabled</span>
+                </label>
+                <div class="watchlist-add-form">
+                    <input type="text" id="wl-plate" placeholder="Plate number (e.g. ABC1234)" class="date-input">
+                    <input type="text" id="wl-label" placeholder="Label (e.g. John's car)" class="date-input">
+                    <button class="btn-enroll" onclick="addPlateToWatchlist()">Add to Watchlist</button>
+                </div>
+            </div>
+
+            <!-- Watchlist -->
+            <div class="card">
+                <div class="card-header">
+                    <span>Plate Watchlist</span>
+                    <button class="btn-refresh" onclick="loadPlateWatchlist()">Refresh</button>
+                </div>
+                <div class="card-body">
+                    <div id="plate-watchlist" class="plate-watchlist">
+                        <div class="no-data">Loading...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recent Plate Reads -->
+            <div class="card" style="margin-top: 14px;">
+                <div class="card-header">Recent Plate Reads</div>
+                <div class="card-body">
+                    <div id="plate-reads" class="events-grid">
+                        <div class="no-data">Loading...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== CAMERAS TAB (admin only) ===== -->
+    <div id="tab-cameras-tab" class="tab-content">
+        <div class="settings-page">
+            <h3 class="settings-section-title">Camera Management <span class="settings-hint">Requires restart after changes</span></h3>
+            <div class="card settings-card">
+                <div class="card-header">
+                    <span>Configured Cameras</span>
+                    <button class="btn-refresh" onclick="addCameraRow()">+ Add Camera</button>
+                </div>
+                <div class="card-body">
+                    <div id="cameras-list" class="cameras-list">
+                        <div class="no-data">Loading...</div>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 12px; margin-top: 12px;">
+                        <button class="btn-save-settings" onclick="saveCamerasConfig()">Save Cameras</button>
+                        <span id="cameras-status" class="settings-status"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== USERS TAB (admin only) ===== -->
+    <div id="tab-users" class="tab-content">
+        <div class="settings-page">
+            <h3 class="settings-section-title">User Management</h3>
+
+            <!-- Add User Form -->
+            <div class="card settings-card">
+                <div class="card-header">Add New User</div>
+                <div class="card-body">
+                    <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end;">
+                        <div class="enroll-field" style="min-width: 150px;">
+                            <label>Username</label>
+                            <input type="text" id="new-user-name" placeholder="username">
+                        </div>
+                        <div class="enroll-field" style="min-width: 150px;">
+                            <label>Password</label>
+                            <input type="password" id="new-user-pass" placeholder="password">
+                        </div>
+                        <div class="enroll-field" style="min-width: 120px;">
+                            <label>Role</label>
+                            <select id="new-user-role" class="date-input">
+                                <option value="viewer">Viewer</option>
+                                <option value="operator">Operator</option>
+                                <option value="admin">Admin</option>
+                            </select>
+                        </div>
+                        <button class="btn-enroll" onclick="addUser()">Add User</button>
+                    </div>
+                    <span id="user-mgmt-status" class="settings-status"></span>
+                </div>
+            </div>
+
+            <!-- Users List -->
+            <div class="card settings-card" style="margin-top: 14px;">
+                <div class="card-header">
+                    <span>All Users</span>
+                    <button class="btn-refresh" onclick="loadUsers()">Refresh</button>
+                </div>
+                <div class="card-body">
+                    <div id="users-list"><div class="no-data">Loading...</div></div>
+                </div>
+            </div>
+
+            <!-- Role Descriptions -->
+            <div class="card settings-card" style="margin-top: 14px;">
+                <div class="card-header">Role Permissions</div>
+                <div class="card-body">
+                    <table class="event-table">
+                        <thead><tr><th>Permission</th><th>Viewer</th><th>Operator</th><th>Admin</th></tr></thead>
+                        <tbody>
+                            <tr><td>View live streams & events</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+                            <tr><td>Manage faces & plates</td><td>-</td><td>Yes</td><td>Yes</td></tr>
+                            <tr><td>Delete events</td><td>-</td><td>Yes</td><td>Yes</td></tr>
+                            <tr><td>Change settings & cameras</td><td>-</td><td>-</td><td>Yes</td></tr>
+                            <tr><td>Manage users</td><td>-</td><td>-</td><td>Yes</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== SETTINGS TAB ===== -->
+    <div id="tab-settings" class="tab-content">
+        <div class="settings-page">
+            <div id="settings-container"></div>
+            <div class="settings-actions">
+                <button class="btn-save-settings" onclick="saveSettings()">Save Changes</button>
+                <span id="settings-status" class="settings-status"></span>
+            </div>
+
+            <!-- Change Password moved to header user menu modal -->
+        </div>
+    </div>
+
+    <!-- ===== Image Lightbox ===== -->
+    <div id="lightbox" class="lightbox" onclick="closeLightbox(event)">
+        <div class="lightbox-content">
+            <button class="lightbox-close" onclick="closeLightbox()">&times;</button>
+            <img id="lightbox-img" src="" alt="Event Image">
+            <div id="lightbox-info" class="lightbox-info"></div>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Alert Sound (short beep as base64) -->
+    <audio id="alert-sound" preload="auto" src="data:audio/wav;base64,UklGRl4FAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YToFAAAAAAEAAgADAAQABQAHAAgACgAMAA4AEAASABUAGAAbAB4AIQAlACkALQAxADYAOwBAAEUASwBRAFcAXgBlAGwAdAB8AIQAjACVAJ4ApwCxALsAxQDPANoA5QDwAPwBCAEUASEBLgE7AUkBVwFlAXQBgwGSAaIBsgHCANIA4wD0AQUBFgEnATkBSwFdAW8BggGUAacBugHNAeEB9AIIAhwCMAJEAlkCbgKDApgCrgLEAtoC8AMGAxwDMwNKA2EDegOSA6sDxAPdA/cDEAMqA0QDXQN3A5IDrQPIA+MD/gQZBDUEUARsBIkEpQTCBN8E/AQaBDgEVgR0BJIE0ATPBO4FDAU7BWoFmQXJBfkGKQZaBowGvgbwByMHVgeJB70H8QgmCFsIkQjHCP0JMwlqCaEJ2QoRCkkKggq7CvQLLgtpC6QL3wwbDFcMlAzRDQ4NTA2KDckOCA5IDogOyQ8KD0wPjg/QEBMQVhCZENwRIBFkEakR7hIzEnkSvxMGE00TlBPcFCQUbBS1FP4VSRWSE9wUJhRwFLsVBhVRFZ0V6RY1FoIWzxcdF2sXuRgIGFcYpxj3GUcZmBnpGjsajRrfGzIbhRvYHCwcgBzUHSkdfR3SHice/B9SH6gf/iBVIKwgAyFaIbIiCiJiIrsi"></audio>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+    <script src="/static/js/app.js?v=2"></script>
+</body>
+</html>

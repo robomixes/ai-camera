@@ -3,11 +3,26 @@
 import cv2
 import numpy as np
 import json
+import logging
 import os
 import sys
 import datetime
-import time # Import 'time' for time.time() calls
-from tensorflow.lite.python.interpreter import Interpreter 
+import threading
+import time
+
+logger = logging.getLogger(__name__)
+
+# Thread lock for TFLite interpreter (not thread-safe)
+_inference_lock = threading.Lock()
+# Thread lock for tracking state (TRACKED_FACES, LOGGING_BUFFER, NEXT_TRACK_ID)
+_tracking_lock = threading.Lock()
+try:
+    from tensorflow.lite.python.interpreter import Interpreter
+except ImportError:
+    try:
+        from tflite_runtime.interpreter import Interpreter
+    except ImportError:
+        Interpreter = None
 import config 
 import db_handler 
 
@@ -96,19 +111,20 @@ def normalize_face(face_image):
     return np.expand_dims(face_norm, axis=0)
 
 def get_face_embedding(face_image):
-    """Runs the FaceNet model to get a 128-dim embedding."""
+    """Runs the FaceNet model to get a 128-dim embedding. Thread-safe."""
     global FACENET_INTERPRETER
     if FACENET_INTERPRETER is None: return None
-        
+
     normalized_input = normalize_face(face_image)
 
-    input_details = FACENET_INTERPRETER.get_input_details()
-    output_details = FACENET_INTERPRETER.get_output_details()
+    with _inference_lock:
+        input_details = FACENET_INTERPRETER.get_input_details()
+        output_details = FACENET_INTERPRETER.get_output_details()
 
-    FACENET_INTERPRETER.set_tensor(input_details[0]['index'], normalized_input)
-    FACENET_INTERPRETER.invoke()
+        FACENET_INTERPRETER.set_tensor(input_details[0]['index'], normalized_input)
+        FACENET_INTERPRETER.invoke()
 
-    embedding = FACENET_INTERPRETER.get_tensor(output_details[0]['index'])[0]
+        embedding = FACENET_INTERPRETER.get_tensor(output_details[0]['index'])[0].copy()
     return embedding
 
 def calculate_distance(emb1, emb2):
@@ -142,10 +158,10 @@ def initialize_facenet_model():
     try:
         FACENET_INTERPRETER = Interpreter(model_path=config.FACENET_MODEL_PATH)
         FACENET_INTERPRETER.allocate_tensors()
-        print(f"FaceNet Model loaded from {config.FACENET_MODEL_PATH}.")
+        logger.info(f"FaceNet Model loaded from {config.FACENET_MODEL_PATH}.")
         return True
     except Exception as e:
-        print(f"ERROR: Failed to load FaceNet model: {e}")
+        logger.error(f"ERROR: Failed to load FaceNet model: {e}")
         return False
 
 def load_known_faces_from_images():
@@ -157,7 +173,7 @@ def load_known_faces_from_images():
     
     try:
         if not os.path.exists(config.KNOWN_FACES_DB):
-            print(f"WARNING: Known faces JSON file NOT FOUND at {config.KNOWN_FACES_DB}.")
+            logger.warning(f"WARNING: Known faces JSON file NOT FOUND at {config.KNOWN_FACES_DB}.")
             return False 
 
         with open(config.KNOWN_FACES_DB, 'r') as f:
@@ -166,10 +182,10 @@ def load_known_faces_from_images():
                  raise TypeError("JSON file must be a dictionary.")
 
     except Exception as e:
-        print(f"ERROR: Failed to read/parse face definitions JSON: {e}")
+        logger.error(f"ERROR: Failed to read/parse face definitions JSON: {e}")
         return False
         
-    print("Calculating average embeddings from known face images...")
+    logger.info("Calculating average embeddings from known face images...")
     
     for name, image_list in face_defs.items():
         person_embeddings = []
@@ -195,9 +211,9 @@ def load_known_faces_from_images():
         if person_embeddings:
             avg_embedding = np.mean(person_embeddings, axis=0)
             KNOWN_EMBEDDINGS[name] = avg_embedding
-            print(f"  -> Calculated average embedding for '{name}' from {len(person_embeddings)} images.")
+            logger.info(f"  -> Calculated average embedding for '{name}' from {len(person_embeddings)} images.")
 
-    print(f"Known faces loaded successfully: {len(KNOWN_EMBEDDINGS)} unique names.")
+    logger.info(f"Known faces loaded successfully: {len(KNOWN_EMBEDDINGS)} unique names.")
     return True
     
 def initialize_system():
@@ -209,9 +225,9 @@ def initialize_system():
     try:
         FACE_DETECTOR = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
         if FACE_DETECTOR.empty():
-            print("WARNING: Haar Cascade (detection step) not found. Face detection reliability may suffer.")
+            logger.warning("WARNING: Haar Cascade (detection step) not found. Face detection reliability may suffer.")
     except Exception as e:
-        print(f"WARNING: Haar Cascade (detection step) could not be loaded: {e}")
+        logger.warning(f"WARNING: Haar Cascade (detection step) could not be loaded: {e}")
         
     return load_known_faces_from_images()
 
@@ -312,14 +328,21 @@ def process_deferred_logs():
         if current_time - entry['last_log_time'] >= config.LOG_DELAY_SECONDS:
             
             # Check 2: Do we have a valid best frame captured during this window?
-            if entry['best_frame'] is not None:
-                
+            if entry['best_frame'] is not None and entry['best_frame'].any():
+
+                # Skip black/empty frames
+                if entry['best_frame'].mean() < 1.0:
+                    entry['best_frame'] = None
+                    entry['best_quality'] = float('inf')
+                    entry['last_log_time'] = current_time
+                    continue
+
                 # --- LOG AND SAVE THE BEST EVENT (Throttle Trigger) ---
-                
+
                 timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 image_filename = f"faces_best_{name}_{timestamp_str}.jpg"
                 full_image_path = os.path.join(config.EVENT_IMAGE_DIR, image_filename)
-                
+
                 # Save the best frame found
                 cv2.imwrite(full_image_path, entry['best_frame'])
                 
@@ -354,7 +377,13 @@ def run_facenet_recognition(frame, picam2_frame_size):
     Runs multi-frame face detection, recognition, and fills the LOGGING_BUFFER.
     """
     annotated_frame = frame.copy()
-    
+
+    # Scale text/line thickness based on frame width
+    h_frame, w_frame = frame.shape[:2]
+    _scale = max(w_frame / 640, 0.5)
+    _font_scale = 0.4 * _scale
+    _thickness = max(1, int(1 * _scale))
+
     # ------------------------------------------------------------------
     # STEP 1: FACE DETECTION & EMBEDDING CALCULATION
     # ------------------------------------------------------------------
@@ -363,34 +392,60 @@ def run_facenet_recognition(frame, picam2_frame_size):
     current_embeddings = []
     
     if FACE_DETECTOR and not FACE_DETECTOR.empty():
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        raw_face_boxes = FACE_DETECTOR.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60))
+        # Adaptive scaling for Haar Cascade detection
+        h_img, w_img = frame.shape[:2]
+        max_detect_width = 800
+        if w_img > max_detect_width:
+            scale = max_detect_width / w_img
+            small = cv2.resize(frame, (max_detect_width, int(h_img * scale)))
+        else:
+            scale = 1.0
+            small = frame
 
+        # Adaptive min face size based on detection frame width
+        detect_w = small.shape[1]
+        min_face = max(20, int(detect_w * 0.05))  # 5% of frame width, min 20px
+
+        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+        small_boxes = FACE_DETECTOR.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(min_face, min_face))
+
+        # Scale boxes back to original resolution
+        raw_face_boxes = []
+        for (x, y, w, h) in small_boxes:
+            raw_face_boxes.append((
+                int(x / scale), int(y / scale),
+                int(w / scale), int(h / scale)
+            ))
+
+        valid_boxes = []
         for (x, y, w, h) in raw_face_boxes:
             face_image = frame[y:y+h, x:x+w]
             embedding = get_face_embedding(face_image)
             if embedding is not None:
                 current_embeddings.append(embedding)
-            else:
-                raw_face_boxes.remove((x,y,w,h))
+                valid_boxes.append((x, y, w, h))
+        raw_face_boxes = valid_boxes
         
     # ------------------------------------------------------------------
-    # STEP 2: TRACKING AND AGGREGATION
+    # STEP 2: TRACKING AND AGGREGATION (locked for thread safety)
     # ------------------------------------------------------------------
-    
-    clean_stale_tracks()
-    associate_detections(raw_face_boxes, current_embeddings)
-    
-    detected_faces = [] 
-    
+
+    with _tracking_lock:
+        clean_stale_tracks()
+        associate_detections(raw_face_boxes, current_embeddings)
+        # Snapshot current tracks for iteration (safe to read outside lock)
+        tracked_snapshot = list(TRACKED_FACES.items())
+
+    detected_faces = []
+
     # ------------------------------------------------------------------
     # STEP 3: RECOGNITION, DRAWING, and BUFFERING
     # ------------------------------------------------------------------
-    
-    for t_id, t_face in TRACKED_FACES.items():
+
+    for t_id, t_face in tracked_snapshot:
         
-        # Only perform recognition if we have enough frames for a stable average
-        if len(t_face.embedding_history) >= 2: 
+        # Perform recognition as soon as we have any embedding (was 2, now 1 for faster detection)
+        if len(t_face.embedding_history) >= 1:
             
             aggregated_embedding = t_face.get_aggregated_embedding()
             name, distance = recognize_face(aggregated_embedding)
@@ -424,42 +479,38 @@ def run_facenet_recognition(frame, picam2_frame_size):
         # ------------------------------------------------------------------
         # --- LOGGING BUFFER FILLING (Only if KNOWN) ---
         # ------------------------------------------------------------------
+        # --- DRAWING ---
+        _line_h = int(18 * _scale)
+        cv2.rectangle(annotated_frame, (x, y), (x + w, y + h), color, _thickness)
+
+        cv2.putText(annotated_frame, display_name, (x, y - _line_h - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, _font_scale, color, _thickness)
+        cv2.putText(annotated_frame, f"{distance:.2f}", (x, y - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, _font_scale, color, _thickness)
+
+        # --- LOGGING BUFFER FILLING (Only if KNOWN, saved AFTER drawing) ---
         if is_known_person:
             person_name = display_name
-            current_quality = distance # Lower distance (closer match) = Higher Quality
-            
-            if person_name not in LOGGING_BUFFER:
-                # Initialize the buffer entry for a new person
-                LOGGING_BUFFER[person_name] = {
-                    'last_log_time': time.time() - config.LOG_DELAY_SECONDS, # Allow immediate log on first appearance
-                    'best_frame': None, 
-                    'best_quality': float('inf'),
-                    'distance': distance
-                } 
-                
-            buffer_entry = LOGGING_BUFFER[person_name]
-            
-            # Check if current frame is the BEST one seen in the current (or new) window
-            if current_quality < buffer_entry['best_quality']:
-                
-                # Store the best available data
-                buffer_entry['best_quality'] = current_quality
-                buffer_entry['distance'] = distance
-                # Save a copy of the annotated frame as the evidence
-                buffer_entry['best_frame'] = annotated_frame.copy() 
-        
-        # --- DRAWING ---
-        cv2.rectangle(annotated_frame, (x, y), (x + w, y + h), color, 2)
-        
-        # Display the Track ID and the recognition result
-        label = f"T{t_id}: {display_name} ({distance:.2f})"
-        cv2.putText(annotated_frame, label, (x, y - 10), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+            current_quality = distance
+
+            with _tracking_lock:
+                if person_name not in LOGGING_BUFFER:
+                    LOGGING_BUFFER[person_name] = {
+                        'last_log_time': time.time() - config.LOG_DELAY_SECONDS,
+                        'best_frame': None,
+                        'best_quality': float('inf'),
+                        'distance': distance
+                    }
+
+                buffer_entry = LOGGING_BUFFER[person_name]
+
+                if current_quality < buffer_entry['best_quality']:
+                    buffer_entry['best_quality'] = current_quality
+                    buffer_entry['distance'] = distance
+                    buffer_entry['best_frame'] = annotated_frame.copy()
 
         detected_faces.append((display_name, 1.0 - distance))
 
-    info_text = f"Tracks: {len(TRACKED_FACES)} | Detections: {len(raw_face_boxes)} | Valid: {len(detected_faces)}"
-    cv2.putText(annotated_frame, info_text, (10, picam2_frame_size[1] - 10), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+    # Info text removed — dashboard sidebar shows detections
     
     return annotated_frame, detected_faces
