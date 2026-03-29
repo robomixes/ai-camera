@@ -160,6 +160,85 @@ class CameraManager:
             })
         return result
 
+    def add_camera(self, cam_config: dict) -> bool:
+        """Start a new camera at runtime."""
+        cam_id = cam_config.get("id")
+        if not cam_id:
+            return False
+        if cam_id in self._instances:
+            logger.warning(f"Camera '{cam_id}' already exists. Remove first.")
+            return False
+        try:
+            self._start_one(cam_config)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to add camera '{cam_id}': {e}")
+            return False
+
+    def remove_camera(self, cam_id: str) -> bool:
+        """Stop and remove a camera at runtime."""
+        inst = self._instances.get(cam_id)
+        if not inst:
+            return False
+        try:
+            inst.stop()
+            del self._instances[cam_id]
+            logger.info(f"Camera '{cam_id}' removed.")
+            return True
+        except Exception as e:
+            logger.error(f"Error removing camera '{cam_id}': {e}")
+            return False
+
+    def restart_camera(self, cam_id: str) -> bool:
+        """Restart a single camera."""
+        inst = self._instances.get(cam_id)
+        if not inst:
+            return False
+        cam_config = inst.config
+        self.remove_camera(cam_id)
+        return self.add_camera(cam_config)
+
+    def reload_cameras(self):
+        """Reload cameras from config — stop removed, start new, restart changed."""
+        new_configs = self._get_camera_configs()
+        new_ids = {c["id"] for c in new_configs}
+        current_ids = set(self._instances.keys())
+
+        # Stop cameras that were removed
+        for cam_id in current_ids - new_ids:
+            self.remove_camera(cam_id)
+            logger.info(f"Camera '{cam_id}' removed (no longer in config)")
+
+        # Start new cameras or restart changed ones
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        to_start = []
+        for cam_cfg in new_configs:
+            cam_id = cam_cfg["id"]
+            if cam_id not in self._instances:
+                # New camera
+                to_start.append(cam_cfg)
+            else:
+                # Check if config changed (URL, type, etc.)
+                old_cfg = self._instances[cam_id].config
+                if cam_cfg.get("url") != old_cfg.get("url") or cam_cfg.get("type") != old_cfg.get("type"):
+                    self.remove_camera(cam_id)
+                    to_start.append(cam_cfg)
+                    logger.info(f"Camera '{cam_id}' config changed — restarting")
+
+        if to_start:
+            if len(to_start) == 1:
+                self._start_one(to_start[0])
+            else:
+                with ThreadPoolExecutor(max_workers=len(to_start)) as executor:
+                    futures = {executor.submit(self._start_one, cfg): cfg["id"] for cfg in to_start}
+                    for future in as_completed(futures):
+                        try:
+                            future.result()
+                        except Exception as e:
+                            logger.error(f"Failed to start camera: {e}")
+
+        logger.info(f"Camera reload complete. {len(self._instances)} camera(s) active.")
+
     @property
     def camera_ids(self) -> list[str]:
         return list(self._instances.keys())

@@ -7,7 +7,8 @@ import logging
 _logger = logging.getLogger(__name__)
 
 # --- Runtime Overrides (persisted across restarts) ---
-_OVERRIDES_FILE = "config_overrides.json"
+_CONFIG_DIR = os.path.join("data", "config") if os.path.isdir(os.path.join("data", "config")) else "."
+_OVERRIDES_FILE = os.path.join(_CONFIG_DIR, "config_overrides.json")
 
 def _load_overrides():
     """Load saved runtime settings from JSON file."""
@@ -50,7 +51,9 @@ ROI_OUTPUT_DIR = "roi_events"
 LOG_DELAY_SECONDS = 5.0
 
 # --- Database & Storage Settings ---
-DB_NAME = "detections_history.db"
+# In Docker, use data/db/ directory (mounted volume). Direct install uses project root.
+_DB_DIR = os.path.join("data", "db") if os.path.isdir(os.path.join("data", "db")) else "."
+DB_NAME = os.path.join(_DB_DIR, "detections_history.db")
 EVENT_IMAGE_DIR = "event_images"
 
 # Example: Filter for people/car detection only

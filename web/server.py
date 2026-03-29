@@ -503,7 +503,19 @@ def create_app() -> FastAPI:
 
         config.save_overrides(overrides)
 
-        return {"saved": len(cameras), "message": "Restart the server to apply changes."}
+        # Hot reload cameras without restart
+        if _manager:
+            _manager.reload_cameras()
+
+        return {"saved": len(cameras), "message": "Cameras updated and applied."}
+
+    @app.post("/api/cameras/{cam_id}/restart")
+    async def restart_camera(request: Request, cam_id: str):
+        err = _require_role(request, "admin")
+        if err: return err
+        if _manager and _manager.restart_camera(cam_id):
+            return {"message": f"Camera '{cam_id}' restarted."}
+        return JSONResponse({"error": f"Camera '{cam_id}' not found"}, status_code=404)
 
     @app.get("/api/snapshot")
     async def snapshot(camera_id: str = ""):

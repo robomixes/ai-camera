@@ -10,7 +10,9 @@ import bcrypt
 
 logger = logging.getLogger(__name__)
 
-AUTH_FILE = "auth.json"
+import os as _os
+_CONFIG_DIR = _os.path.join("data", "config") if _os.path.isdir(_os.path.join("data", "config")) else "."
+AUTH_FILE = _os.path.join(_CONFIG_DIR, "auth.json")
 VALID_ROLES = ("admin", "operator", "viewer")
 ROLE_HIERARCHY = {"admin": 3, "operator": 2, "viewer": 1}
 
