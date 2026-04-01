@@ -8,20 +8,19 @@ services:
     ports:
       - "${WEB_PORT:-8080}:8080"
     volumes:
-      # Persistent data
+      # Persistent data (directories only — Docker handles creation)
       - ./data/logs:/app/logs
       - ./data/event_images:/app/event_images
       - ./data/roi_events:/app/roi_events
       - ./data/plate_images:/app/plate_images
       - ./data/people_search_queue:/app/people_search_queue
-      - ./data/detections_history.db:/app/detections_history.db
+      - ./data/db:/app/data/db
       # Config persistence
-      - ./config_overrides.json:/app/config_overrides.json
-      - ./auth.json:/app/auth.json
+      - ./data/config:/app/data/config
     environment:
       # Camera settings (override config.py defaults)
       - CAMERA_TYPE=${CAMERA_TYPE:-rtsp}
-      - RTSP_URL=${RTSP_URL:-}
+      - RTSP_URL=${RTSP_URL:-rtsp://admin:AnAs1001kad!@192.168.1.2/h264Preview_01_sub}
       - RTSP_TRANSPORT=${RTSP_TRANSPORT:-tcp}
       - CAMERA_ID=${CAMERA_ID:-CAM_001}
       # Web server
@@ -31,7 +30,7 @@ services:
       - STREAM_TARGET_FPS=${STREAM_TARGET_FPS:-10}
       - STREAM_MAX_WIDTH=${STREAM_MAX_WIDTH:-960}
       # AI
-      - DEFAULT_AI_MODE=${DEFAULT_AI_MODE:-yolo}
+      - DEFAULT_AI_MODE=${DEFAULT_AI_MODE:-both}
       - ANPR_ENABLED=${ANPR_ENABLED:-false}
       # Suppress noisy logs
       - TF_ENABLE_ONEDNN_OPTS=0

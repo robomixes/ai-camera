@@ -229,7 +229,8 @@ def initialize_system():
     except Exception as e:
         logger.warning(f"WARNING: Haar Cascade (detection step) could not be loaded: {e}")
         
-    return load_known_faces_from_images()
+    load_known_faces_from_images()  # OK if no faces enrolled yet
+    return True
 
 # ----------------------------------------------------------------------
 # --- Tracking and Cleanup Functions (Updated for Fast Cleanup and Exit Log) ---
