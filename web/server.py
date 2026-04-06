@@ -116,7 +116,7 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="AI Camera", lifespan=lifespan)
+    app = FastAPI(title="Privora AI Camera", lifespan=lifespan)
 
     # --- Auth Middleware ---
     PUBLIC_PATHS = {"/login", "/api/login", "/api/health", "/static/css/style.css", "/static/js/app.js"}

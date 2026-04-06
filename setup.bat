@@ -1,7 +1,7 @@
 @echo off
-REM AI Camera - Setup Script (Windows)
+REM Privora AI Camera - Setup Script (Windows)
 
-echo === AI Camera Setup ===
+echo === Privora AI Camera Setup ===
 
 REM Create virtual environment
 if not exist "venv" (

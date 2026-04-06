@@ -1,9 +1,9 @@
 #!/bin/bash
-# AI Camera - Setup Script (Linux/Raspberry Pi)
+# Privora AI Camera - Setup Script (Linux/Raspberry Pi)
 
 set -e
 
-echo "=== AI Camera Setup ==="
+echo "=== Privora AI Camera Setup ==="
 
 # Create virtual environment
 if [ ! -d "venv" ]; then

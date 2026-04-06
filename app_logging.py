@@ -1,10 +1,10 @@
-"""Centralized logging configuration for ai-camera."""
+"""Centralized logging configuration for Privora AI Camera."""
 import logging
 import os
 from logging.handlers import RotatingFileHandler
 
 LOG_DIR = "logs"
-LOG_FILE = os.path.join(LOG_DIR, "ai-camera.log")
+LOG_FILE = os.path.join(LOG_DIR, "privora.log")
 MAX_BYTES = 5 * 1024 * 1024  # 5MB
 BACKUP_COUNT = 3
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
