@@ -18,7 +18,7 @@ app = create_app()
 if __name__ == "__main__":
     host = getattr(config, "WEB_HOST", "0.0.0.0")
     port = getattr(config, "WEB_PORT", 8080)
-    logger.info(f"Starting AI Camera Dashboard at http://localhost:{port}")
+    logger.info(f"Starting Privora AI Camera at http://localhost:{port}")
     try:
         uvicorn.run(app, host=host, port=port, log_level="error")
     except (KeyboardInterrupt, SystemExit):

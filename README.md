@@ -1,8 +1,8 @@
-# AI-Camera
+# Privora AI Camera
 
 ## AI-Powered Multi-Camera Surveillance System
 
-AI-Camera is an open-source Python surveillance system with real-time AI detection, face recognition, license plate reading, and a web dashboard. Runs on Raspberry Pi and PC.
+Privora AI Camera is an open-source Python surveillance system with real-time AI detection, face recognition, license plate reading, and a web dashboard. Runs on Raspberry Pi and PC.
 
 ---
 
