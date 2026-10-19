@@ -288,6 +288,15 @@
                     <button class="btn-export" onclick="exportEvents('json')">Export JSON</button>
                 </div>
                 <div class="events-page-info">
+                    <label class="events-page-size">
+                        <span>Per page</span>
+                        <select id="events-page-size" onchange="changeEventsPageSize(this.value)">
+                            <option value="20" selected>20</option>
+                            <option value="50">50</option>
+                            <option value="100">100</option>
+                            <option value="200">200</option>
+                        </select>
+                    </label>
                     <span id="events-showing">-</span>
                     <button id="events-prev" class="btn-page" disabled>&larr; Prev</button>
                     <button id="events-next" class="btn-page">Next &rarr;</button>
@@ -496,8 +505,33 @@
     <div id="lightbox" class="lightbox" onclick="closeLightbox(event)">
         <div class="lightbox-content">
             <button class="lightbox-close" onclick="closeLightbox()">&times;</button>
-            <img id="lightbox-img" src="" alt="Event Image">
+            <div class="lightbox-stage">
+                <button id="lightbox-prev" class="lightbox-nav lightbox-prev"
+                        onclick="event.stopPropagation(); lightboxNav(-1)"
+                        title="Previous event (left arrow)" aria-label="Previous event">&#10094;</button>
+                <img id="lightbox-img" src="" alt="Event Image">
+                <button id="lightbox-next" class="lightbox-nav lightbox-next"
+                        onclick="event.stopPropagation(); lightboxNav(1)"
+                        title="Next event (right arrow)" aria-label="Next event">&#10095;</button>
+            </div>
             <div id="lightbox-info" class="lightbox-info"></div>
+            <div class="lightbox-actions">
+                <button id="lightbox-play" class="lightbox-play"
+                        onclick="event.stopPropagation(); toggleLightboxPlay()"
+                        title="Play through events (space)" aria-label="Play through events">&#9654;</button>
+                <label class="lightbox-speed" onclick="event.stopPropagation()">
+                    <select id="lightbox-speed" onchange="setLightboxSpeed(this.value)" title="Playback speed">
+                        <option value="2000">0.5x</option>
+                        <option value="1000" selected>1x</option>
+                        <option value="500">2x</option>
+                        <option value="250">4x</option>
+                    </select>
+                </label>
+                <span id="lightbox-counter" class="lightbox-counter"></span>
+                <a id="lightbox-download" class="lightbox-download" href="#" download
+                   title="Download image" aria-label="Download image"
+                   onclick="event.stopPropagation()">&#10515;</a>
+            </div>
         </div>
     </div>
 

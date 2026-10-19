@@ -175,6 +175,48 @@ def _build_date_clause(date_from: str, date_to: str) -> tuple[str, list]:
     return where, params
 
 
+def _frame_key(row) -> str:
+    """Identity of the frame a detection row came from.
+
+    One frame can contain several objects (a person *and* a motorcycle), and each
+    object is stored as its own row sharing a single saved image. Rows that share an
+    image belong to the same event. A row without an image can't be grouped safely,
+    so it stays on its own.
+    """
+    image = (row.get("image_path") or "").strip()
+    if not image:
+        return f"id:{row.get('id')}"
+    # Filenames are only timestamped to the second, so include the camera to keep
+    # two cameras firing in the same second from being merged into one event.
+    return f"{row.get('camera_id') or ''}|{image}"
+
+
+def _group_detections(rows: list) -> list:
+    """Merge detection rows from the same frame into one event carrying every tag."""
+    grouped = {}
+    for row in rows:
+        key = _frame_key(row)
+        tag = {"label": row.get("object_type"), "confidence": row.get("confidence") or 0}
+        event = grouped.get(key)
+        if event is None:
+            event = dict(row)
+            event["ids"] = [row.get("id")]
+            event["tags"] = [tag]
+            grouped[key] = event
+        else:
+            event["ids"].append(row.get("id"))
+            event["tags"].append(tag)
+
+    for event in grouped.values():
+        # Strongest detection leads, so object_type/confidence stay meaningful for
+        # callers (and filters) that only understand a single label per event.
+        event["tags"].sort(key=lambda t: t["confidence"], reverse=True)
+        event["object_type"] = event["tags"][0]["label"]
+        event["confidence"] = event["tags"][0]["confidence"]
+        event["ids"].sort()
+    return list(grouped.values())
+
+
 def get_recent_events(limit: int = 50, event_type: str = "all", offset: int = 0,
                       date_from: str = "", date_to: str = "", camera_id: str = "") -> list:
     """Query recent detection and face events for the web dashboard."""
@@ -196,8 +238,7 @@ def get_recent_events(limit: int = 50, event_type: str = "all", offset: int = 0,
                 f"'detection' as event_type FROM detections WHERE 1=1{date_where}{cam_where} ORDER BY timestamp DESC",
                 date_params + cam_params
             )
-            for row in cursor.fetchall():
-                events.append(dict(row))
+            events.extend(_group_detections([dict(r) for r in cursor.fetchall()]))
 
         if event_type in ("all", "face"):
             cursor.execute(
@@ -242,7 +283,15 @@ def get_event_count(event_type: str = "all", date_from: str = "", date_to: str =
         cursor = conn.cursor()
 
         if event_type in ("all", "detection"):
-            cursor.execute(f"SELECT COUNT(*) FROM detections WHERE 1=1{date_where}{cam_where}", date_params + cam_params)
+            # Count frames, not objects — several detections sharing one saved image are
+            # shown as a single event, so counting rows would overstate the page count.
+            cursor.execute(
+                "SELECT COUNT(*) FROM (SELECT 1 FROM detections "
+                f"WHERE 1=1{date_where}{cam_where} GROUP BY CASE "
+                "WHEN image_path IS NULL OR image_path = '' THEN 'id:' || id "
+                "ELSE COALESCE(camera_id, '') || '|' || image_path END)",
+                date_params + cam_params
+            )
             total += cursor.fetchone()[0]
 
         if event_type in ("all", "face"):
@@ -336,6 +385,18 @@ def delete_events(ids: list) -> int:
                     plate_ids.append(int(parts[1]))
 
         if det_ids:
+            # The dashboard shows one event per frame, so deleting it must take every
+            # object logged from that frame — otherwise the siblings reappear as an
+            # event whose image file has just been deleted.
+            placeholders = ",".join("?" * len(det_ids))
+            cursor.execute(
+                "SELECT id FROM detections WHERE id IN ({ph}) OR (image_path IS NOT NULL "
+                "AND image_path != '' AND (COALESCE(camera_id, '') || '|' || image_path) IN "
+                "(SELECT COALESCE(camera_id, '') || '|' || image_path FROM detections "
+                "WHERE id IN ({ph}) AND image_path IS NOT NULL AND image_path != ''))".format(ph=placeholders),
+                det_ids + det_ids
+            )
+            det_ids = [row["id"] for row in cursor.fetchall()]
             placeholders = ",".join("?" * len(det_ids))
             cursor.execute(f"SELECT image_path FROM detections WHERE id IN ({placeholders})", det_ids)
             for row in cursor.fetchall():

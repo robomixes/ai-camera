@@ -23,6 +23,61 @@ function formatEventDateTime(ts) {
     return d ? d.toLocaleString() : (ts || "-");
 }
 
+// A single frame can hold several objects (a person *and* a motorcycle). The backend
+// returns them merged as one event with a `tags` list, strongest first.
+function formatTags(ev) {
+    if (Array.isArray(ev.tags) && ev.tags.length) {
+        return ev.tags
+            .map(t => `${t.label || "?"} ${Math.round((t.confidence || 0) * 100)}%`)
+            .join(", ");
+    }
+    const conf = ev.confidence ? Math.round(ev.confidence * 100) + "%" : "";
+    return `${ev.object_type || "-"} ${conf}`.trim();
+}
+
+// Turn a list of events into the set the lightbox steps through. Only events with an
+// image can be shown, so the rest are dropped; the order matches what is on screen.
+function buildLightboxSet(events) {
+    return (events || [])
+        .filter(ev => ev.image_path)
+        .map(ev => {
+            const t = ev.event_type || "unknown";
+            const dir = t === "plate" ? "plates" : (t === "face" ? "events" : "roi");
+            return {
+                imgUrl: `/images/${dir}/${ev.image_path}`,
+                title: eventTitle(ev),
+                subtitle: eventSubtitle(ev),
+                time: ev.timestamp,
+            };
+        });
+}
+
+// Title and subtitle for an event, shared by the grid cards and the lightbox so the
+// two can never drift apart.
+function eventTitle(ev) {
+    const type = ev.event_type || "unknown";
+    if (type === "detection") {
+        return (ev.tags && ev.tags.length > 1)
+            ? ev.tags.map(t => t.label).join(" + ")
+            : (ev.object_type || "-");
+    }
+    if (type === "plate") return ev.plate_text || "-";
+    return ev.person_name || "Unknown";
+}
+
+function eventSubtitle(ev) {
+    const type = ev.event_type || "unknown";
+    if (type === "detection") return formatTags(ev);
+    if (type === "plate") {
+        let s = `${ev.vehicle_type || "vehicle"} ${ev.confidence ? (ev.confidence * 100).toFixed(0) + "%" : ""}`;
+        if (ev.is_watchlist) s += " WATCHLIST";
+        return s;
+    }
+    let s = ev.distance ? `distance: ${ev.distance}` : "";
+    if (ev.is_known) s += " (known)";
+    return s;
+}
+
 // ===== Camera Selection =====
 let currentCameraId = "";
 
@@ -260,15 +315,19 @@ async function loadEvents() {
             return;
         }
 
-        tbody.innerHTML = data.events.map(ev => {
+        sidebarLightboxSet = buildLightboxSet(data.events);
+
+        tbody.innerHTML = data.events.map((ev, i) => {
+            const navIndex = ev.image_path
+                ? sidebarLightboxSet.findIndex(x => x.imgUrl.endsWith("/" + ev.image_path))
+                : -1;
             const time = formatEventTime(ev.timestamp);
             const type = ev.event_type || "-";
             const typeClass = type === "detection" ? "detection" : "face";
             const camId = ev.camera_id || "-";
             let detail = "";
             if (type === "detection") {
-                const conf = ev.confidence ? (ev.confidence * 100).toFixed(0) + "%" : "";
-                detail = `${ev.object_type || "-"} ${conf}`;
+                detail = formatTags(ev);
             } else if (type === "face") {
                 detail = `${ev.person_name || "-"} (${ev.distance || "-"})`;
             } else if (type === "plate") {
@@ -276,7 +335,7 @@ async function loadEvents() {
             }
             const hasImage = ev.image_path ? "clickable" : "";
             const imgDir = type === "plate" ? "plates" : (type === "face" ? "events" : "roi");
-            return `<tr class="${hasImage}" onclick="${ev.image_path ? `openLightboxFromEvent('${imgDir}', '${ev.image_path}', '${type}', '${detail}', '${ev.timestamp || ""}')` : ""}">
+            return `<tr class="${hasImage}" onclick="${navIndex >= 0 ? `openLightboxAt(sidebarLightboxSet, ${navIndex})` : ""}">
                 <td>${time}</td>
                 <td><span class="event-type ${typeClass}">${type}</span></td>
                 <td>${detail}</td>
@@ -292,12 +351,39 @@ async function loadEvents() {
 
 let eventsFilter = "all";
 let eventsOffset = 0;
-const eventsPageSize = 24;
+let eventsPageSize = 20;
+
+// Page size is a user choice, so remember it across reloads.
+function changeEventsPageSize(value) {
+    const n = parseInt(value, 10);
+    if (!n || n < 1) return;
+    eventsPageSize = n;
+    try { localStorage.setItem("eventsPageSize", String(n)); } catch (e) { /* private mode */ }
+    eventsOffset = 0;   // a new page size invalidates the current offset
+    loadEventsPage();
+}
+
+function restoreEventsPageSize() {
+    let saved = null;
+    try { saved = localStorage.getItem("eventsPageSize"); } catch (e) { /* private mode */ }
+    const n = parseInt(saved, 10);
+    const select = document.getElementById("events-page-size");
+    if (!select) return;
+    // Only accept a value the dropdown actually offers.
+    const allowed = Array.from(select.options).map(o => parseInt(o.value, 10));
+    if (n && allowed.includes(n)) {
+        eventsPageSize = n;
+    }
+    select.value = String(eventsPageSize);
+}
 let lastKnownEventCount = 0;
 let eventsAutoRefresh = true;
 let eventsDateFrom = "";
 let eventsDateTo = "";
 let eventsCameraFilter = "";
+let eventsLightboxSet = [];   // events on the current page that have an image
+let sidebarLightboxSet = [];  // live-view sidebar table
+let homeLightboxSet = [];     // home recent-events feed
 
 async function loadEventsPage() {
     const grid = document.getElementById("events-grid");
@@ -323,6 +409,9 @@ async function loadEventsPage() {
             return;
         }
 
+        // Events with an image, in the order shown — this is what the lightbox arrows walk.
+        eventsLightboxSet = buildLightboxSet(data.events);
+
         grid.innerHTML = data.events.map(ev => {
             const type = ev.event_type || "unknown";
             const typeClass = type === "detection" ? "detection" : "face";
@@ -330,27 +419,18 @@ async function loadEventsPage() {
             const imgDir = type === "plate" ? "plates" : (type === "face" ? "events" : "roi");
             const imgUrl = ev.image_path ? `/images/${imgDir}/${ev.image_path}` : null;
             const compositeId = `${type}_${ev.id}`;
+            const navIndex = imgUrl
+                ? eventsLightboxSet.findIndex(i => i.imgUrl === imgUrl)
+                : -1;
 
-            let title = "";
-            let subtitle = "";
-            if (type === "detection") {
-                title = ev.object_type || "-";
-                subtitle = ev.confidence ? (ev.confidence * 100).toFixed(0) + "% confidence" : "";
-            } else if (type === "plate") {
-                title = ev.plate_text || "-";
-                subtitle = `${ev.vehicle_type || "vehicle"} ${ev.confidence ? (ev.confidence * 100).toFixed(0) + "%" : ""}`;
-                if (ev.is_watchlist) subtitle += " WATCHLIST";
-            } else {
-                title = ev.person_name || "Unknown";
-                subtitle = ev.distance ? `distance: ${ev.distance}` : "";
-                if (ev.is_known) subtitle += " (known)";
-            }
+            const title = eventTitle(ev);
+            const subtitle = eventSubtitle(ev);
 
             return `<div class="event-card ${imgUrl ? 'has-image' : ''}" data-id="${compositeId}">
                 <div class="event-card-select">
                     <input type="checkbox" class="event-checkbox" data-id="${compositeId}" onclick="event.stopPropagation(); updateSelectionBar()">
                 </div>
-                <div class="event-card-img" onclick="if('${imgUrl}' !== 'null') openLightbox('${imgUrl}', '${title}', '${subtitle}', '${time}')">
+                <div class="event-card-img" onclick="if (${navIndex} >= 0) openLightboxAt(eventsLightboxSet, ${navIndex})">
                     ${imgUrl
                         ? `<img src="${imgUrl}" alt="${title}" loading="lazy">`
                         : `<div class="event-card-noimg">No Image</div>`}
@@ -502,16 +582,118 @@ async function deleteAllEvents() {
 
 // ===== Lightbox =====
 
-function openLightbox(imgUrl, title, subtitle, time) {
-    const lb = document.getElementById("lightbox");
-    document.getElementById("lightbox-img").src = imgUrl;
+// Events the lightbox can step through, and where we currently are in them.
+// Callers that open a one-off image (home feed, plates) get a single-item list,
+// which simply disables both arrows.
+let lightboxItems = [];
+let lightboxIndex = 0;
+
+function renderLightbox() {
+    const item = lightboxItems[lightboxIndex];
+    if (!item) return;
+
+    document.getElementById("lightbox-img").src = item.imgUrl;
     // Callers hand us the raw stored timestamp; render it in the viewer's timezone.
     document.getElementById("lightbox-info").innerHTML = `
-        <strong>${title}</strong>
-        <span>${subtitle}</span>
-        <small>${formatEventDateTime(time)}</small>
+        <strong>${item.title}</strong>
+        <span>${item.subtitle}</span>
+        <small>${formatEventDateTime(item.time)}</small>
     `;
-    lb.classList.add("active");
+
+    const dl = document.getElementById("lightbox-download");
+    dl.href = item.imgUrl;
+    // Give the saved file the event's own name rather than a generic one.
+    dl.setAttribute("download", (item.imgUrl || "").split("/").pop() || "event.jpg");
+
+    const many = lightboxItems.length > 1;
+    document.getElementById("lightbox-counter").textContent =
+        many ? `${lightboxIndex + 1} / ${lightboxItems.length}` : "";
+    const play = document.getElementById("lightbox-play");
+    const speed = document.getElementById("lightbox-speed");
+    if (play) play.hidden = !many;
+    if (speed && speed.parentElement) speed.parentElement.hidden = !many;
+
+    const prev = document.getElementById("lightbox-prev");
+    const next = document.getElementById("lightbox-next");
+    prev.hidden = !many;
+    next.hidden = !many;
+    prev.disabled = lightboxIndex <= 0;
+    next.disabled = lightboxIndex >= lightboxItems.length - 1;
+}
+
+function lightboxNav(delta) {
+    const target = lightboxIndex + delta;
+    if (target < 0 || target >= lightboxItems.length) return;
+    lightboxIndex = target;
+    renderLightbox();
+}
+
+// ----- Playback: step through the events like frames of a video -----
+let lightboxTimer = null;
+let lightboxSpeed = 1000;
+
+function lightboxIsPlaying() {
+    return lightboxTimer !== null;
+}
+
+function stopLightboxPlay() {
+    if (lightboxTimer !== null) {
+        clearInterval(lightboxTimer);
+        lightboxTimer = null;
+    }
+    const btn = document.getElementById("lightbox-play");
+    if (btn) {
+        btn.innerHTML = "&#9654;";          // play
+        btn.title = "Play through events (space)";
+        btn.classList.remove("playing");
+    }
+}
+
+function startLightboxPlay() {
+    if (lightboxItems.length < 2) return;
+    // Starting from the last frame would stop immediately — rewind first.
+    if (lightboxIndex >= lightboxItems.length - 1) {
+        lightboxIndex = 0;
+        renderLightbox();
+    }
+    stopLightboxPlay();
+    lightboxTimer = setInterval(() => {
+        if (lightboxIndex >= lightboxItems.length - 1) {
+            stopLightboxPlay();     // reached the end — stop rather than loop
+            return;
+        }
+        lightboxNav(1);
+    }, lightboxSpeed);
+    const btn = document.getElementById("lightbox-play");
+    if (btn) {
+        btn.innerHTML = "&#10073;&#10073;";  // pause
+        btn.title = "Pause (space)";
+        btn.classList.add("playing");
+    }
+}
+
+function toggleLightboxPlay() {
+    if (lightboxIsPlaying()) stopLightboxPlay();
+    else startLightboxPlay();
+}
+
+function setLightboxSpeed(ms) {
+    lightboxSpeed = parseInt(ms, 10) || 1000;
+    if (lightboxIsPlaying()) startLightboxPlay();   // restart at the new interval
+}
+
+// Open a navigable set of events, starting at `index`.
+function openLightboxAt(items, index) {
+    if (!items || !items.length) return;
+    stopLightboxPlay();
+    lightboxItems = items;
+    lightboxIndex = Math.max(0, Math.min(index, items.length - 1));
+    renderLightbox();
+    document.getElementById("lightbox").classList.add("active");
+}
+
+function openLightbox(imgUrl, title, subtitle, time) {
+    openLightboxAt([{ imgUrl, title, subtitle, time }], 0);
 }
 
 function openLightboxFromEvent(imgDir, imagePath, type, detail, time) {
@@ -520,8 +702,18 @@ function openLightboxFromEvent(imgDir, imagePath, type, detail, time) {
     openLightbox(imgUrl, detail, type, time);
 }
 
+document.addEventListener("keydown", (e) => {
+    const lb = document.getElementById("lightbox");
+    if (!lb || !lb.classList.contains("active")) return;
+    if (e.key === "ArrowLeft") { e.preventDefault(); lightboxNav(-1); }
+    else if (e.key === "ArrowRight") { e.preventDefault(); lightboxNav(1); }
+    else if (e.key === " ") { e.preventDefault(); toggleLightboxPlay(); }
+    else if (e.key === "Escape") { closeLightbox(); }
+});
+
 function closeLightbox(event) {
     if (event && event.target !== event.currentTarget) return;
+    stopLightboxPlay();
     document.getElementById("lightbox").classList.remove("active");
 }
 
@@ -1511,6 +1703,8 @@ async function loadHomeRecentEvents() {
             return;
         }
 
+        homeLightboxSet = buildLightboxSet(events);
+
         container.innerHTML = events.map(ev => {
             const type = ev.event_type || "-";
             const typeClass = type === "detection" ? "detection" : "face";
@@ -1520,14 +1714,17 @@ async function loadHomeRecentEvents() {
 
             let detail = "";
             if (type === "detection") {
-                detail = ev.object_type || "-";
+                detail = (ev.tags && ev.tags.length > 1)
+                    ? ev.tags.map(t => t.label).join(" + ")
+                    : (ev.object_type || "-");
             } else if (type === "plate") {
                 detail = ev.plate_text || "-";
             } else {
                 detail = ev.person_name || "Unknown";
             }
 
-            return `<div class="recent-event-row" ${imgUrl ? `onclick="openLightbox('${imgUrl}', '${detail}', '${type}', '${ev.timestamp || ""}')" style="cursor:pointer"` : ""}>
+            const navIndex = imgUrl ? homeLightboxSet.findIndex(x => x.imgUrl === imgUrl) : -1;
+            return `<div class="recent-event-row" ${navIndex >= 0 ? `onclick="openLightboxAt(homeLightboxSet, ${navIndex})" style="cursor:pointer"` : ""}>
                 <div class="recent-event-thumb">
                     ${imgUrl ? `<img src="${imgUrl}" alt="${detail}" loading="lazy">` : '<div class="no-thumb">-</div>'}
                 </div>
@@ -1836,6 +2033,7 @@ async function pollStatus() {
 // ===== Init =====
 
 document.addEventListener("DOMContentLoaded", () => {
+    restoreEventsPageSize();
     loadCurrentUser();
     loadCameras().then(() => {
         connectSSE();

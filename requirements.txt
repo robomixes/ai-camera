@@ -1,5 +1,11 @@
 # --- Core ---
-opencv-python>=4.11
+# Upper bounds are deliberate: OpenCV 5 dropped CascadeClassifier and HOGDescriptor
+# from the cv2 namespace, which breaks face detection and aborts startup.
+# Both packages ship the same `cv2` module and ultralytics/easyocr pull in the
+# headless build transitively, so pinning only opencv-python is not enough —
+# an unpinned headless 5.x would still be the cv2 that gets imported.
+opencv-python>=4.11,<5
+opencv-python-headless>=4.11,<5
 numpy>=1.26
 ultralytics>=8.4
 
