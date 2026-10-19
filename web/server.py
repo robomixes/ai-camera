@@ -835,7 +835,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/faces/enroll")
     async def enroll_face(request: Request, name: str = Form(...), files: list[UploadFile] = File(...),
-                          crop_faces: bool = Form(False)):
+                          crop_faces: bool = Form(False), boxes: str = Form("")):
         err = _require_role(request, "operator")
         if err: return err
         import cv2
@@ -844,6 +844,17 @@ def create_app() -> FastAPI:
         if not name or not name.strip():
             return JSONResponse({"error": "Name is required"}, status_code=400)
         name = name.strip()
+
+        # Hand-drawn face boxes, keyed by file index, as fractions of the image.
+        # The browser sends fractions rather than pixels so the preview's display
+        # scale never has to match the original resolution.
+        manual_boxes = {}
+        if boxes:
+            try:
+                for key, box in (json.loads(boxes) or {}).items():
+                    manual_boxes[int(key)] = box
+            except (ValueError, TypeError, AttributeError):
+                logger.warning("Ignoring malformed enrolment boxes payload")
 
         # Load Haar Cascade for face cropping
         face_detector = None
@@ -864,7 +875,37 @@ def create_app() -> FastAPI:
                     status_code=413
                 )
 
-            if crop_faces and face_detector is not None:
+            manual = manual_boxes.get(i)
+            if manual:
+                # An explicit box beats auto-detection: the user has told us where
+                # the face is, including faces the cascade would miss entirely.
+                nparr = np.frombuffer(content, np.uint8)
+                img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                if img is None:
+                    skipped += 1
+                    continue
+                ih, iw = img.shape[:2]
+                try:
+                    x1 = int(float(manual["x"]) * iw)
+                    y1 = int(float(manual["y"]) * ih)
+                    x2 = x1 + int(float(manual["w"]) * iw)
+                    y2 = y1 + int(float(manual["h"]) * ih)
+                except (KeyError, TypeError, ValueError):
+                    skipped += 1
+                    continue
+                # Same 20% padding the auto-crop applies, clamped to the image.
+                pad = int(max(x2 - x1, y2 - y1) * 0.2)
+                x1 = max(0, x1 - pad)
+                y1 = max(0, y1 - pad)
+                x2 = min(iw, x2 + pad)
+                y2 = min(ih, y2 + pad)
+                if x2 - x1 < 20 or y2 - y1 < 20:
+                    skipped += 1
+                    continue
+                filename = f"enroll_{name}_{ts}_{i}_manual.jpg"
+                cv2.imwrite(str(faces_dir / filename), img[y1:y2, x1:x2])
+                saved_files.append(filename)
+            elif crop_faces and face_detector is not None:
                 # Decode image and detect faces
                 nparr = np.frombuffer(content, np.uint8)
                 img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -982,7 +1023,18 @@ def create_app() -> FastAPI:
     @app.get("/")
     async def index():
         index_file = STATIC_DIR / "index.html"
-        return HTMLResponse(index_file.read_text())
+        html = index_file.read_text()
+        # Cache-bust the bundle by its newest mtime. The version used to be a
+        # hardcoded "?v=2", which pinned every browser to whatever app.js it had
+        # cached under that URL — changes shipped but were never fetched.
+        try:
+            version = str(int(max(
+                (STATIC_DIR / rel).stat().st_mtime
+                for rel in ("js/app.js", "css/style.css")
+            )))
+        except OSError:
+            version = "0"
+        return HTMLResponse(html.replace("__ASSET_V__", version))
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 

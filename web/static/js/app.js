@@ -1898,6 +1898,126 @@ function toggleFaceCard(card) {
     card.classList.toggle("expanded");
 }
 
+// ----- Face enrolment: box the face by hand -----
+// Shown when "Auto-crop faces" is off: the photo is displayed large so the face
+// can be boxed precisely. Boxes are normalised (0-1 of the displayed image) and
+// converted to pixels server-side, so the preview's scale never has to match the
+// original resolution.
+let enrollBoxes = {};
+
+function enrollAutoCropOn() {
+    const cb = document.getElementById("enroll-crop");
+    return !cb || cb.checked;
+}
+
+function renderEnrollPreviews() {
+    const input = document.getElementById("enroll-files");
+    const wrap = document.getElementById("enroll-preview");
+    if (!input || !wrap) return;
+
+    enrollBoxes = {};
+    wrap.innerHTML = "";
+    const files = Array.from(input.files || []);
+    if (!files.length) return;
+
+    if (enrollAutoCropOn()) {
+        wrap.innerHTML = '<div class="enroll-hint">' + files.length +
+            ' photo(s) selected. Faces will be found automatically. ' +
+            'Untick <strong>Auto-crop faces</strong> to box them yourself.</div>';
+        return;
+    }
+
+    wrap.innerHTML = '<div class="enroll-hint">Drag across each face to select it. ' +
+                     'Photos left unboxed are saved whole.</div>';
+
+    files.forEach((file, i) => {
+        const item = document.createElement("div");
+        item.className = "enroll-shot";
+        item.innerHTML = `
+            <div class="enroll-shot-head">
+                <span class="enroll-shot-name">${file.name}</span>
+                <span class="enroll-shot-state">no box yet</span>
+                <button type="button" class="enroll-clear" hidden>Clear box</button>
+            </div>
+            <div class="enroll-stage" data-index="${i}">
+                <img alt="${file.name}">
+                <div class="enroll-box" hidden></div>
+            </div>`;
+        wrap.appendChild(item);
+
+        const img = item.querySelector("img");
+        img.src = URL.createObjectURL(file);
+        img.onload = () => URL.revokeObjectURL(img.src);
+
+        attachBoxDrawing(item.querySelector(".enroll-stage"), item, i);
+    });
+}
+
+function attachBoxDrawing(stage, item, index) {
+    const boxEl = item.querySelector(".enroll-box");
+    const state = item.querySelector(".enroll-shot-state");
+    const clearBtn = item.querySelector(".enroll-clear");
+    let startX = 0, startY = 0, drawing = false;
+
+    const paint = (x, y, w, h) => {
+        boxEl.hidden = false;
+        boxEl.style.left = x + "px";
+        boxEl.style.top = y + "px";
+        boxEl.style.width = w + "px";
+        boxEl.style.height = h + "px";
+    };
+
+    stage.addEventListener("pointerdown", (e) => {
+        const r = stage.getBoundingClientRect();
+        startX = e.clientX - r.left;
+        startY = e.clientY - r.top;
+        drawing = true;
+        stage.setPointerCapture(e.pointerId);
+        paint(startX, startY, 0, 0);
+        e.preventDefault();
+    });
+
+    stage.addEventListener("pointermove", (e) => {
+        if (!drawing) return;
+        const r = stage.getBoundingClientRect();
+        const cx = Math.max(0, Math.min(e.clientX - r.left, r.width));
+        const cy = Math.max(0, Math.min(e.clientY - r.top, r.height));
+        paint(Math.min(startX, cx), Math.min(startY, cy),
+              Math.abs(cx - startX), Math.abs(cy - startY));
+    });
+
+    stage.addEventListener("pointerup", () => {
+        if (!drawing) return;
+        drawing = false;
+        const r = stage.getBoundingClientRect();
+        const x = parseFloat(boxEl.style.left), y = parseFloat(boxEl.style.top);
+        const w = parseFloat(boxEl.style.width), h = parseFloat(boxEl.style.height);
+        if (w < 12 || h < 12) {   // a stray click, not a deliberate box
+            boxEl.hidden = true;
+            delete enrollBoxes[index];
+            state.textContent = "no box yet";
+            state.classList.remove("set");
+            clearBtn.hidden = true;
+            return;
+        }
+        enrollBoxes[index] = {
+            x: x / r.width, y: y / r.height,
+            w: w / r.width, h: h / r.height,
+        };
+        state.textContent = "face selected";
+        state.classList.add("set");
+        clearBtn.hidden = false;
+    });
+
+    clearBtn.addEventListener("click", () => {
+        delete enrollBoxes[index];
+        boxEl.hidden = true;
+        state.textContent = "no box yet";
+        state.classList.remove("set");
+        clearBtn.hidden = true;
+    });
+}
+
 async function enrollFace(event) {
     event.preventDefault();
 
@@ -1921,6 +2041,8 @@ async function enrollFace(event) {
     const formData = new FormData();
     formData.append("name", name);
     formData.append("crop_faces", cropFaces);
+    // Keyed by file index so the server can match a box to its photo.
+    formData.append("boxes", JSON.stringify(enrollBoxes));
     for (const file of files) {
         formData.append("files", file);
     }
@@ -2034,6 +2156,10 @@ async function pollStatus() {
 
 document.addEventListener("DOMContentLoaded", () => {
     restoreEventsPageSize();
+    const enrollInput = document.getElementById("enroll-files");
+    if (enrollInput) enrollInput.addEventListener("change", renderEnrollPreviews);
+    const enrollCrop = document.getElementById("enroll-crop");
+    if (enrollCrop) enrollCrop.addEventListener("change", renderEnrollPreviews);
     loadCurrentUser();
     loadCameras().then(() => {
         connectSSE();

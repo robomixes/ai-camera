@@ -2291,3 +2291,87 @@ header h1 {
     color: #8892a4;
     font-size: 0.8rem;
 }
+
+/* ===== Face enrolment: large photo with a hand-drawn face box ===== */
+.enroll-preview {
+    display: block;
+    margin-top: 14px;
+}
+
+.enroll-hint {
+    color: #8892a4;
+    font-size: 0.85rem;
+    margin-bottom: 12px;
+}
+
+.enroll-shot {
+    background: #16213e;
+    border: 1px solid #1e2d4a;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 16px;
+}
+
+.enroll-shot-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+    font-size: 0.8rem;
+}
+
+.enroll-shot-name {
+    color: #e0e0e0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+}
+
+.enroll-shot-state { color: #4a5568; }
+.enroll-shot-state.set { color: #00d4ff; font-weight: 600; }
+
+.enroll-clear {
+    background: transparent;
+    border: 1px solid #1e2d4a;
+    color: #8892a4;
+    border-radius: 4px;
+    padding: 3px 10px;
+    cursor: pointer;
+    font-size: 0.72rem;
+}
+
+.enroll-clear:hover { color: #ff5252; border-color: #ff5252; }
+
+/* The stage must hug the image exactly — it is the positioning context for the
+   drawn box, so any padding here would offset the box from the face.
+   inline-block keeps it the width of the image rather than the whole row, so a
+   drag beside a portrait photo is not mapped onto the image. */
+.enroll-stage {
+    position: relative;
+    display: inline-block;
+    line-height: 0;
+    cursor: crosshair;
+    touch-action: none;
+    user-select: none;
+    max-width: 100%;
+}
+
+/* Large on purpose: the point is to pick a face precisely. */
+.enroll-stage img {
+    display: block;
+    max-width: 100%;
+    max-height: 70vh;
+    border-radius: 6px;
+}
+
+.enroll-box {
+    position: absolute;
+    border: 2px solid #00d4ff;
+    background: rgba(0, 212, 255, 0.15);
+    box-shadow: 0 0 0 9999px rgba(10, 16, 30, 0.35);
+    pointer-events: none;
+    border-radius: 2px;
+}
+
+.enroll-clear[hidden], .enroll-box[hidden] { display: none !important; }
