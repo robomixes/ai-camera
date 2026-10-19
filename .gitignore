@@ -392,3 +392,6 @@ recorded/
 people_search_queue/*.jpg
 people_search_queue/ready/*.jpg
 people_search_queue/ready/known_faces.json
+
+# EasyOCR model weights pulled at runtime (~94MB) — not source
+easyocr-models/

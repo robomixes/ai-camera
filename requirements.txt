@@ -4,16 +4,23 @@
 # Both packages ship the same `cv2` module and ultralytics/easyocr pull in the
 # headless build transitively, so pinning only opencv-python is not enough —
 # an unpinned headless 5.x would still be the cv2 that gets imported.
-opencv-python>=4.11,<5
-opencv-python-headless>=4.11,<5
-numpy>=1.26
-ultralytics>=8.4
+opencv-python==4.13.0.92
+opencv-python-headless==4.13.0.92
+numpy==2.4.3
+ultralytics==8.4.31
+
+# torch is pulled in by ultralytics/easyocr rather than used directly, but it is
+# pinned here because the version matters: torch 2.14.1 crashes this app natively
+# (no traceback) on the first YOLO inference, killing the process seconds after
+# startup. 2.11.0 is the version the last known-good image shipped.
+torch==2.11.0
+torchvision==0.26.0
 
 # --- Face Recognition ---
-tensorflow>=2.14
+tensorflow==2.21.0
 
 # --- ANPR ---
-easyocr>=1.7
+easyocr==1.7.2
 
 # --- Web ---
 fastapi>=0.135

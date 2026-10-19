@@ -90,6 +90,22 @@ FACE_IMAGE_BASE_DIR = "people_search_queue/ready"
 KNOWN_FACES_DB = os.path.join(FACE_IMAGE_BASE_DIR, "known_faces.json")
 
 # Core Recognition Thresholds
+# Haar cascade strictness. minNeighbors is how many overlapping detections a region
+# needs before it counts as a face; OpenCV's default of 5 is permissive enough that
+# stonework and railings register as faces on every frame.
+#
+# Measured over 30 live frames of a scene containing no faces:
+#   minNeighbors=5  -> false face in 30/30 frames   (the old default)
+#   minNeighbors=8  -> 1/30
+#   minNeighbors=10 -> 0/30
+#
+# Raising the minimum face size also reaches zero, but only at ~12% of frame width,
+# which is larger than a real face at street distance from this camera — it would
+# reject genuine people. minNeighbors is the lever that does not cost reach, so the
+# size ratio stays at the original 5%.
+FACE_MIN_NEIGHBORS = 15
+FACE_MIN_SIZE_RATIO = 0.05
+
 RECOGNITION_THRESHOLD = 0.9  # If distance is BELOW this, it's a known person.
 REJECTION_DISTANCE = 1.4     # If distance is ABOVE this, reject the detection as a non-face artifact.
 INPUT_SIZE = (160, 160)      # FaceNet input size

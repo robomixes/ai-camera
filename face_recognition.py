@@ -405,10 +405,14 @@ def run_facenet_recognition(frame, picam2_frame_size):
 
         # Adaptive min face size based on detection frame width
         detect_w = small.shape[1]
-        min_face = max(20, int(detect_w * 0.05))  # 5% of frame width, min 20px
+        size_ratio = getattr(config, "FACE_MIN_SIZE_RATIO", 0.08)
+        min_face = max(20, int(detect_w * size_ratio))
+        min_neighbors = getattr(config, "FACE_MIN_NEIGHBORS", 8)
 
         gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-        small_boxes = FACE_DETECTOR.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(min_face, min_face))
+        small_boxes = FACE_DETECTOR.detectMultiScale(
+            gray, scaleFactor=1.1, minNeighbors=min_neighbors, minSize=(min_face, min_face)
+        )
 
         # Scale boxes back to original resolution
         raw_face_boxes = []

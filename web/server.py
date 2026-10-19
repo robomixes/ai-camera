@@ -704,6 +704,8 @@ def create_app() -> FastAPI:
         "DETECTION_CLASSES": {"type": "list", "description": "Object classes to detect (comma-separated)", "category": "Detection"},
         "DETECTION_CONFIDENCE": {"type": "float", "min": 0.1, "max": 0.95, "description": "Min YOLO confidence (raise to cut false positives)", "category": "Detection"},
         "SAVE_ANNOTATED_IMAGES": {"type": "bool", "description": "Draw detection boxes on saved event images (live view always shows them)", "category": "Detection"},
+        "FACE_MIN_NEIGHBORS": {"type": "int", "min": 3, "max": 20, "description": "Face detector strictness (raise to cut false faces on textured surfaces)", "category": "Face Recognition"},
+        "FACE_MIN_SIZE_RATIO": {"type": "float", "min": 0.02, "max": 0.5, "description": "Smallest face as a fraction of frame width", "category": "Face Recognition"},
         "RECOGNITION_THRESHOLD": {"type": "float", "min": 0.1, "max": 2.0, "description": "Distance below which a face is 'known'", "category": "Face Recognition"},
         "REJECTION_DISTANCE": {"type": "float", "min": 0.5, "max": 3.0, "description": "Distance above which detection is rejected", "category": "Face Recognition"},
         "DETECTION_COOLDOWN_SECONDS": {"type": "float", "min": 5, "max": 600, "description": "Seconds before re-logging same detection", "category": "Detection"},

@@ -1015,6 +1015,13 @@ header h1 {
     top: 8px;
     right: 8px;
     z-index: 5;
+    /* A backing chip so the control reads against photo thumbnails, which are
+       arbitrary images — a bare checkbox disappears into light or busy frames. */
+    background: rgba(10, 16, 30, 0.72);
+    border-radius: 6px;
+    padding: 4px;
+    display: flex;
+    line-height: 0;
 }
 
 .event-checkbox {
@@ -1022,13 +1029,19 @@ header h1 {
     height: 18px;
     accent-color: #00d4ff;
     cursor: pointer;
-    opacity: 0.4;
+    /* Was 0.4 and only solid on hover, which made multi-select undiscoverable. */
+    opacity: 0.9;
     transition: opacity 0.2s;
 }
 
 .event-card:hover .event-checkbox,
 .event-checkbox:checked {
     opacity: 1;
+}
+
+.event-card:has(.event-checkbox:checked) {
+    outline: 2px solid #00d4ff;
+    outline-offset: -2px;
 }
 
 /* Selection bar */
