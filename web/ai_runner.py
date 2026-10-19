@@ -211,8 +211,14 @@ class AIRunner:
                 entry["logged"] = True
                 entry["log_time"] = now
 
-        # Log new detections and generate alerts — use annotated frame (with boxes) for saving
-        save_frame = annotated_frame if annotated_frame is not None and annotated_frame.mean() >= 1.0 else clean_frame
+        # Log new detections and generate alerts. Saved event images use the clean frame
+        # by default: the annotation boxes sit on top of the very detail you want when
+        # reviewing an event. Enable SAVE_ANNOTATED_IMAGES to keep the boxes instead.
+        if getattr(config, "SAVE_ANNOTATED_IMAGES", False):
+            preferred, fallback = annotated_frame, clean_frame
+        else:
+            preferred, fallback = clean_frame, annotated_frame
+        save_frame = preferred if preferred is not None and preferred.mean() >= 1.0 else fallback
         if new_detections and save_frame is not None and save_frame.mean() >= 1.0:
             self._log_event(save_frame, new_detections)
             self._generate_alerts(new_detections)
@@ -285,7 +291,8 @@ class AIRunner:
 
         analyzed_frame, detected_data = ai_features.run_yolov8_detection(
             frame_bgr, self._cam.frame_size,
-            roi=None, classes_filter=classes
+            roi=None, classes_filter=classes,
+            conf=getattr(config, "DETECTION_CONFIDENCE", 0.5)
         )
         detections = []
         for item in detected_data:
@@ -369,7 +376,8 @@ class AIRunner:
         # YOLO on clean frame — returns annotated frame with object boxes
         yolo_frame, yolo_dets = ai_features.run_yolov8_detection(
             frame_bgr.copy(), self._cam.frame_size,
-            roi=None, classes_filter=config.DETECTION_CLASSES
+            roi=None, classes_filter=config.DETECTION_CLASSES,
+            conf=getattr(config, "DETECTION_CONFIDENCE", 0.5)
         )
 
         # FaceNet on clean frame — returns annotated frame with face boxes

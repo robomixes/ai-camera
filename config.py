@@ -10,6 +10,11 @@ _logger = logging.getLogger(__name__)
 _CONFIG_DIR = os.path.join("data", "config") if os.path.isdir(os.path.join("data", "config")) else "."
 _OVERRIDES_FILE = os.path.join(_CONFIG_DIR, "config_overrides.json")
 
+# Keys the user has explicitly saved from the dashboard. Environment variables act
+# as first-boot defaults only, so a saved setting is never silently reverted on restart.
+_SAVED_KEYS = set()
+
+
 def _load_overrides():
     """Load saved runtime settings from JSON file."""
     if os.path.exists(_OVERRIDES_FILE):
@@ -18,9 +23,15 @@ def _load_overrides():
                 overrides = json.load(f)
             for key, value in overrides.items():
                 globals()[key] = value
+                _SAVED_KEYS.add(key)
             _logger.info(f"Loaded {len(overrides)} setting override(s) from {_OVERRIDES_FILE}")
         except Exception as e:
             _logger.warning(f"Could not load overrides: {e}")
+
+def overrides_path() -> str:
+    """Path of the overrides file actually in use (varies with the working directory)."""
+    return _OVERRIDES_FILE
+
 
 def save_overrides(settings: dict):
     """Save runtime settings to JSON file for persistence."""
@@ -58,6 +69,16 @@ EVENT_IMAGE_DIR = "event_images"
 
 # Example: Filter for people/car detection only
 DETECTION_CLASSES = ['person']
+
+# Minimum YOLO confidence for a detection to count. Ultralytics defaults to 0.25,
+# which lets low-confidence false positives through (railings, statues, shadows
+# read as "person"). Raise this if static objects keep getting detected.
+DETECTION_CONFIDENCE = 0.5
+
+# Draw detection boxes on the images saved for events. Off by default — the boxes
+# obscure faces, plates and other detail you want when reviewing an event. The live
+# stream always shows boxes regardless of this setting.
+SAVE_ANNOTATED_IMAGES = False
 # --- Face Recognition Paths & Thresholds ---
 # Location of the TFLite model
 FACENET_MODEL_PATH = "facenet.tflite"
@@ -144,7 +165,9 @@ CAMERAS = []
 # --- Load overrides (file-based, then env vars) ---
 _load_overrides()
 
-# Environment variable overrides (highest priority, for Docker)
+# Environment variable overrides: defaults for a fresh deployment. A value the user
+# has saved from the dashboard wins, otherwise a hardcoded env var in docker-compose.yml
+# would silently revert that setting on every restart.
 _ENV_MAP = {
     "CAMERA_TYPE": ("CAMERA_TYPE", str),
     "RTSP_URL": ("RTSP_URL", str),
@@ -163,6 +186,9 @@ _ENV_MAP = {
 }
 
 for _env_key, (_config_key, _cast) in _ENV_MAP.items():
+    if _config_key in _SAVED_KEYS:
+        # Explicitly saved from the dashboard — keep the user's choice.
+        continue
     _env_val = os.getenv(_env_key)
     if _env_val is not None:
         try:

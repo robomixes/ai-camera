@@ -1,3 +1,28 @@
+// ===== Timestamps =====
+// The backend stores event times with SQLite's CURRENT_TIMESTAMP, which is always UTC
+// and carries no timezone marker ("2026-10-19 08:25:49"). Passing that straight to
+// `new Date()` makes the browser read it as local time, so events appear shifted by the
+// UTC offset. Tag it as UTC explicitly, then render in the viewer's own timezone.
+function parseEventTime(ts) {
+    if (!ts) return null;
+    let s = String(ts).trim().replace(" ", "T");
+    if (!/(Z|[+-]\d{2}:?\d{2})$/.test(s)) s += "Z";
+    const d = new Date(s);
+    return isNaN(d.getTime()) ? null : d;
+}
+
+// "14:25:49" in local time
+function formatEventTime(ts) {
+    const d = parseEventTime(ts);
+    return d ? d.toLocaleTimeString() : (ts || "-");
+}
+
+// "19/10/2026, 14:25:49" in local time
+function formatEventDateTime(ts) {
+    const d = parseEventTime(ts);
+    return d ? d.toLocaleString() : (ts || "-");
+}
+
 // ===== Camera Selection =====
 let currentCameraId = "";
 
@@ -236,7 +261,7 @@ async function loadEvents() {
         }
 
         tbody.innerHTML = data.events.map(ev => {
-            const time = ev.timestamp ? ev.timestamp.substring(11, 19) || ev.timestamp : "-";
+            const time = formatEventTime(ev.timestamp);
             const type = ev.event_type || "-";
             const typeClass = type === "detection" ? "detection" : "face";
             const camId = ev.camera_id || "-";
@@ -301,7 +326,7 @@ async function loadEventsPage() {
         grid.innerHTML = data.events.map(ev => {
             const type = ev.event_type || "unknown";
             const typeClass = type === "detection" ? "detection" : "face";
-            const time = ev.timestamp || "-";
+            const time = formatEventDateTime(ev.timestamp);
             const imgDir = type === "plate" ? "plates" : (type === "face" ? "events" : "roi");
             const imgUrl = ev.image_path ? `/images/${imgDir}/${ev.image_path}` : null;
             const compositeId = `${type}_${ev.id}`;
@@ -480,10 +505,11 @@ async function deleteAllEvents() {
 function openLightbox(imgUrl, title, subtitle, time) {
     const lb = document.getElementById("lightbox");
     document.getElementById("lightbox-img").src = imgUrl;
+    // Callers hand us the raw stored timestamp; render it in the viewer's timezone.
     document.getElementById("lightbox-info").innerHTML = `
         <strong>${title}</strong>
         <span>${subtitle}</span>
-        <small>${time}</small>
+        <small>${formatEventDateTime(time)}</small>
     `;
     lb.classList.add("active");
 }
@@ -1488,7 +1514,7 @@ async function loadHomeRecentEvents() {
         container.innerHTML = events.map(ev => {
             const type = ev.event_type || "-";
             const typeClass = type === "detection" ? "detection" : "face";
-            const time = ev.timestamp ? ev.timestamp.substring(11, 19) : "-";
+            const time = formatEventTime(ev.timestamp);
             const imgDir = type === "plate" ? "plates" : (type === "face" ? "events" : "roi");
             const imgUrl = ev.image_path ? `/images/${imgDir}/${ev.image_path}` : null;
 
@@ -1616,7 +1642,7 @@ async function loadPlateReads() {
                 <div class="event-card-body">
                     <div class="event-card-title" style="font-family:monospace;color:#ffa726">${ev.plate_text || "-"}</div>
                     <div class="event-card-sub">${ev.vehicle_type || "vehicle"} (${ev.confidence ? (ev.confidence * 100).toFixed(0) + "%" : "-"})</div>
-                    <div class="event-card-time">${ev.timestamp || "-"} <span class="event-card-cam">${ev.camera_id || ""}</span></div>
+                    <div class="event-card-time">${formatEventDateTime(ev.timestamp)} <span class="event-card-cam">${ev.camera_id || ""}</span></div>
                 </div>
             </div>`;
         }).join("");

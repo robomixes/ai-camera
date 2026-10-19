@@ -27,11 +27,15 @@ def is_inside_roi(center_x, center_y, roi):
            (roi_y <= center_y <= roi_y + roi_h)
 
 
-def run_yolov8_detection(frame, frame_size, roi=None, classes_filter=None):
+def run_yolov8_detection(frame, frame_size, roi=None, classes_filter=None, conf=0.25):
     """
-    Performs general object detection and conditionally filters results based on the ROI 
+    Performs general object detection and conditionally filters results based on the ROI
     and the list of desired classes.
-    
+
+    Args:
+        conf: Minimum confidence for a box to be returned. Ultralytics' own default
+              is 0.25, which is low enough that static objects get labelled "person".
+
     Returns:
         np.array: The frame with filtered bounding boxes and labels drawn.
         list: A list of unique detected object data: [(label, confidence), ...]. <-- UPDATED RETURN
@@ -44,9 +48,9 @@ def run_yolov8_detection(frame, frame_size, roi=None, classes_filter=None):
     if classes_filter:
         model_names = YOLO_MODEL.names
         filter_ids = [k for k, v in model_names.items() if v in classes_filter]
-        results = YOLO_MODEL(frame, stream=True, verbose=False, classes=filter_ids) 
+        results = YOLO_MODEL(frame, stream=True, verbose=False, classes=filter_ids, conf=conf)
     else:
-        results = YOLO_MODEL(frame, stream=True, verbose=False) 
+        results = YOLO_MODEL(frame, stream=True, verbose=False, conf=conf)
     
     # List to store tuples of (label, confidence) for objects outside the ROI
     filtered_detected_data = []

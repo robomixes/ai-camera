@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 import threading
 import time
@@ -25,6 +26,8 @@ from web.auth import (initialize_auth, verify_login, change_password, reset_pass
                        has_permission, get_all_users, create_user, delete_user, update_user_role)
 from web.camera_manager import CameraManager
 from web.utils import encode_jpeg, resize_frame
+
+logger = logging.getLogger(__name__)
 
 _faces_lock = threading.Lock()
 
@@ -442,21 +445,20 @@ def create_app() -> FastAPI:
         # Read directly from overrides file to get the real (unmasked) URLs
         existing = {}
         try:
-            if os.path.exists("config_overrides.json"):
-                with open("config_overrides.json", 'r') as f:
+            overrides_file = config.overrides_path()
+            if os.path.exists(overrides_file):
+                with open(overrides_file, 'r') as f:
                     saved = json.load(f)
                 for c in saved.get("CAMERAS", []):
                     existing[c.get("id", "")] = c
                 if not existing and saved.get("RTSP_URL"):
                     existing[saved.get("CAMERA_ID", config.CAMERA_ID)] = {"url": saved["RTSP_URL"]}
         except Exception:
-            pass
-        # Fallback to runtime config
-        if not existing:
-            for c in (config.CAMERAS or []):
-                existing[c.get("id", "")] = c
-        if not existing:
-            existing[config.CAMERA_ID] = {"url": config.RTSP_URL}
+            logger.exception("Could not read existing camera config; masked passwords may not resolve")
+        # Merge in runtime config for any id the file did not cover
+        for c in (config.CAMERAS or []):
+            existing.setdefault(c.get("id", ""), c)
+        existing.setdefault(config.CAMERA_ID, {"url": config.RTSP_URL})
 
         # Validate and restore masked passwords
         for i, cam in enumerate(cameras):
@@ -465,8 +467,17 @@ def create_app() -> FastAPI:
 
             # If URL contains masked password, restore from existing config
             url = cam.get("url", "")
-            if "****" in url and cam["id"] in existing:
-                cam["url"] = existing[cam["id"]].get("url", url)
+            if "****" in url:
+                cam["url"] = existing.get(cam["id"], {}).get("url", url)
+                # Never persist the display mask as a real credential: that silently
+                # destroys the stored password and the stream fails to authenticate.
+                if "****" in cam["url"]:
+                    return JSONResponse(
+                        {"error": f"Camera '{cam['id']}': password is masked and no saved "
+                                  f"credential was found. Re-enter the full RTSP URL "
+                                  f"including the password."},
+                        status_code=400,
+                    )
 
             if not cam.get("url") and cam.get("type") == "rtsp":
                 return JSONResponse({"error": f"Camera '{cam['id']}' missing 'url'"}, status_code=400)
@@ -691,6 +702,8 @@ def create_app() -> FastAPI:
         "DEFAULT_AI_MODE": {"type": "string", "description": "Default AI mode: yolo, facenet, or both", "category": "Detection"},
         "LOG_DELAY_SECONDS": {"type": "float", "min": 0.5, "max": 60, "description": "Seconds between event logs", "category": "Detection"},
         "DETECTION_CLASSES": {"type": "list", "description": "Object classes to detect (comma-separated)", "category": "Detection"},
+        "DETECTION_CONFIDENCE": {"type": "float", "min": 0.1, "max": 0.95, "description": "Min YOLO confidence (raise to cut false positives)", "category": "Detection"},
+        "SAVE_ANNOTATED_IMAGES": {"type": "bool", "description": "Draw detection boxes on saved event images (live view always shows them)", "category": "Detection"},
         "RECOGNITION_THRESHOLD": {"type": "float", "min": 0.1, "max": 2.0, "description": "Distance below which a face is 'known'", "category": "Face Recognition"},
         "REJECTION_DISTANCE": {"type": "float", "min": 0.5, "max": 3.0, "description": "Distance above which detection is rejected", "category": "Face Recognition"},
         "DETECTION_COOLDOWN_SECONDS": {"type": "float", "min": 5, "max": 600, "description": "Seconds before re-logging same detection", "category": "Detection"},
