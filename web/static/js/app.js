@@ -651,18 +651,20 @@ function stopLightboxPlay() {
 
 function startLightboxPlay() {
     if (lightboxItems.length < 2) return;
-    // Starting from the last frame would stop immediately — rewind first.
-    if (lightboxIndex >= lightboxItems.length - 1) {
-        lightboxIndex = 0;
+    // Events are listed newest first, so playback walks the list backwards: that
+    // runs oldest -> newest, which is the order things actually happened.
+    // Starting from the newest would stop immediately — rewind to the oldest.
+    if (lightboxIndex <= 0) {
+        lightboxIndex = lightboxItems.length - 1;
         renderLightbox();
     }
     stopLightboxPlay();
     lightboxTimer = setInterval(() => {
-        if (lightboxIndex >= lightboxItems.length - 1) {
-            stopLightboxPlay();     // reached the end — stop rather than loop
+        if (lightboxIndex <= 0) {
+            stopLightboxPlay();     // caught up to the newest — stop rather than loop
             return;
         }
-        lightboxNav(1);
+        lightboxNav(-1);
     }, lightboxSpeed);
     const btn = document.getElementById("lightbox-play");
     if (btn) {

@@ -38,6 +38,8 @@ class AIRunner:
         # {detection_key: {"first_seen": time, "last_seen": time, "logged": bool}}
         self._active_detections: dict = {}
         self._stale_timeout = 5.0  # seconds without seeing a detection before it's "gone"
+        # Thumbnail of the last frame actually written, for near-duplicate rejection.
+        self._last_saved_sig: np.ndarray | None = None
 
     def start(self) -> None:
         if self._mode in ("facenet", "both"):
@@ -411,6 +413,26 @@ class AIRunner:
 
         return combined, detections
 
+    @staticmethod
+    def _frame_signature(frame: np.ndarray) -> np.ndarray | None:
+        """A tiny greyscale thumbnail used to compare one frame against another.
+
+        Downscaling to 32x32 throws away sensor noise and compression artefacts,
+        which differ between frames of an otherwise motionless scene, while
+        keeping enough structure that a real change still shows up.
+        """
+        try:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            return cv2.resize(gray, (32, 32), interpolation=cv2.INTER_AREA).astype(np.int16)
+        except cv2.error:
+            return None
+
+    def _near_duplicate_of_last_save(self, sig: np.ndarray | None) -> float | None:
+        """Mean per-pixel difference from the last saved frame, or None if unknown."""
+        if sig is None or self._last_saved_sig is None:
+            return None
+        return float(np.mean(np.abs(self._last_saved_sig - sig)))
+
     def _log_event(self, frame: np.ndarray, detections: list) -> None:
         """Save an event image and log to database."""
         try:
@@ -419,6 +441,21 @@ class AIRunner:
             # Skip black/empty frames
             if frame is None or frame.mean() < 1.0:
                 return
+
+            # A motionless scene that keeps re-triggering writes the same picture
+            # over and over. If this frame is visually indistinguishable from the
+            # last one saved, there is nothing new to look at.
+            signature = None
+            if getattr(config, "DEDUPE_SIMILAR_EVENTS", True):
+                signature = self._frame_signature(frame)
+                diff = self._near_duplicate_of_last_save(signature)
+                threshold = getattr(config, "DEDUPE_DIFF_THRESHOLD", 2.0)
+                if diff is not None and diff < threshold:
+                    logger.debug(
+                        "Skipping near-duplicate event image (diff %.2f < %.2f)",
+                        diff, threshold,
+                    )
+                    return
 
             # Skip if low disk space
             from web.utils import has_disk_space
@@ -484,6 +521,11 @@ class AIRunner:
                         watchlist_id=wl["id"] if wl else None,
                         camera_id=self._camera_id,
                     )
+
+            # Only remember frames that were actually written, so a skipped save
+            # (low disk, blank frame) does not become the baseline for comparison.
+            if signature is not None:
+                self._last_saved_sig = signature
 
         except Exception as e:
             logger.error(f"AI Runner logging error: {e}")

@@ -72,13 +72,33 @@ DETECTION_CLASSES = ['person']
 
 # Minimum YOLO confidence for a detection to count. Ultralytics defaults to 0.25,
 # which lets low-confidence false positives through (railings, statues, shadows
-# read as "person"). Raise this if static objects keep getting detected.
-DETECTION_CONFIDENCE = 0.5
+# read as "person").
+#
+# Measured against this camera on an empty scene:
+#   daylight:  the balustrade peaks at 39%  -> 0.50 was clear
+#   night/IR:  the same balustrade peaks at 53%
+#
+# Infrared flattens texture and stonework reads far more like a person, so a
+# threshold tuned in daylight lets night artefacts through. 0.60 clears the night
+# peak with margin; genuine people measured 69-93% in daylight.
+DETECTION_CONFIDENCE = 0.6
 
 # Draw detection boxes on the images saved for events. Off by default — the boxes
 # obscure faces, plates and other detail you want when reviewing an event. The live
 # stream always shows boxes regardless of this setting.
 SAVE_ANNOTATED_IMAGES = False
+
+# Drop an event whose image is visually indistinguishable from the last one
+# saved. A motionless scene that keeps re-triggering writes the same picture
+# repeatedly; there is nothing new to look at and it buries real events.
+# The number is the mean per-pixel difference (0-255) of a 32x32 greyscale
+# thumbnail: lower is stricter, 0 disables by never matching.
+DEDUPE_SIMILAR_EVENTS = True
+# Measured on this camera: consecutive frames of a motionless scene differ by at
+# most 0.03, a person far from the camera by ~1.4, a close object by ~15. 0.3 is
+# ten times the noise floor and still well under the faintest real change — 2.0
+# looked reasonable but would have silently dropped distant people.
+DEDUPE_DIFF_THRESHOLD = 0.3
 # --- Face Recognition Paths & Thresholds ---
 # Location of the TFLite model
 FACENET_MODEL_PATH = "facenet.tflite"
