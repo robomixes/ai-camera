@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 import logging
 import os
@@ -25,6 +26,7 @@ from web.auth import (initialize_auth, verify_login, change_password, reset_pass
                        get_session_user, get_session_info, get_session_role, delete_session,
                        check_rate_limit, record_failed_attempt, clear_attempts,
                        has_permission, get_all_users, create_user, delete_user, update_user_role)
+from web.camera_discovery import CameraDiscoveryService
 from web.camera_manager import CameraManager
 from web.utils import encode_jpeg, resize_frame
 
@@ -61,6 +63,7 @@ def _mask_sensitive(data: dict) -> dict:
 
 # --- Globals set during lifespan ---
 _manager: CameraManager | None = None
+_discovery: CameraDiscoveryService | None = None
 _start_time: float = 0.0
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -87,6 +90,9 @@ async def lifespan(app: FastAPI):
     _manager = CameraManager()
     _manager.start_all()
 
+    global _discovery
+    _discovery = CameraDiscoveryService(_manager, _apply_discovered_url)
+
     # Start background maintenance task
     async def _maintenance_loop():
         import logging as _log
@@ -110,13 +116,111 @@ async def lifespan(app: FastAPI):
 
     maintenance_task = asyncio.create_task(_maintenance_loop())
 
+    # Watch camera health and go looking for any camera that has gone missing.
+    async def _discovery_loop():
+        import logging as _log
+        disc_logger = _log.getLogger("discovery")
+        while True:
+            await asyncio.sleep(getattr(config, "AUTO_DISCOVERY_CHECK_INTERVAL_SECONDS", 15))
+            try:
+                if not getattr(config, "AUTO_DISCOVERY_ENABLED", True):
+                    continue
+                if _discovery is not None:
+                    await _discovery.run_once()
+            except Exception as e:
+                disc_logger.error(f"Rediscovery error: {e}", exc_info=True)
+
+    discovery_task = asyncio.create_task(_discovery_loop())
+
     yield
 
+    discovery_task.cancel()
     maintenance_task.cancel()
 
     # Shutdown
     if _manager:
         _manager.stop_all()
+
+
+def _persist_cameras(cameras: list[dict]) -> None:
+    """Write the camera list to config and disk.
+
+    The legacy single-camera scalars are mirrored from cameras[0] deliberately:
+    _get_camera_configs() falls back to them when CAMERAS is empty, and leaving
+    them stale means a later restart quietly reverts to a dead address.
+    """
+    config.CAMERAS = cameras
+    overrides = {"CAMERAS": cameras}
+    if cameras:
+        first = cameras[0]
+        overrides["CAMERA_ID"] = first.get("id", "CAM_001")
+        overrides["CAMERA_DESCRIPTION"] = first.get("description", "")
+        overrides["CAMERA_TYPE"] = first.get("type", "rtsp")
+        overrides["RTSP_URL"] = first.get("url", "")
+        overrides["RTSP_TRANSPORT"] = first.get("transport", "tcp")
+        overrides["FRAME_WIDTH"] = first.get("width", 1280)
+        overrides["FRAME_HEIGHT"] = first.get("height", 720)
+        overrides["GPS_LATITUDE"] = first.get("latitude", 0)
+        overrides["GPS_LONGITUDE"] = first.get("longitude", 0)
+        for k, v in overrides.items():
+            if k != "CAMERAS":
+                setattr(config, k, v)
+    config.save_overrides(overrides)
+
+
+def _apply_discovered_url(camera_id: str, new_url: str) -> bool:
+    """Persist a rediscovered address and reattach. Runs in a worker thread."""
+    from camera.discovery import mask_host_only
+
+    if not new_url or "****" in new_url:
+        logger.error("[%s] refusing to persist a masked URL", camera_id)
+        return False
+
+    manager = _manager
+    if manager is None:
+        return False
+
+    try:
+        with manager.reconfigure_lock:
+            cameras = copy.deepcopy(config.CAMERAS or [])
+            previous = ""
+            if cameras:
+                target = next((c for c in cameras if c.get("id") == camera_id), None)
+                if target is None:
+                    logger.error("[%s] not in the camera list; not persisting", camera_id)
+                    return False
+                previous = target.get("url", "")
+                target["url"] = new_url
+                # A deep copy matters: CameraInstance.config holds a reference to
+                # the very dict inside config.CAMERAS, so mutating in place would
+                # leave reload_cameras() comparing a dict to itself, seeing no
+                # change, and never restarting the camera — config and dashboard
+                # would show the new address while the stream stayed dead.
+                _persist_cameras(cameras)
+            else:
+                # Single-camera deployments keep CAMERAS empty and drive
+                # everything from the legacy scalars. Materialising a list here
+                # would change the shape of the user's config as a side effect
+                # of an automatic recovery, so only the scalar is updated.
+                previous = getattr(config, "RTSP_URL", "")
+                config.RTSP_URL = new_url
+                config.save_overrides({"RTSP_URL": new_url})
+
+            if previous:
+                # Kept for rollback: once a key lands in the overrides file the
+                # matching env var is skipped for good, so a user correcting
+                # RTSP_URL in .env after a bad adoption would be ignored.
+                config.save_overrides({
+                    "PREVIOUS_RTSP_URL": previous,
+                    "PREVIOUS_RTSP_URL_AT": datetime.now().isoformat(timespec="seconds"),
+                })
+
+            manager.reload_cameras()
+        logger.info("[%s] address updated to %s", camera_id, mask_host_only(new_url))
+        return True
+    except Exception as e:
+        logger.error("[%s] could not apply discovered address: %s", camera_id, e)
+        return False
 
 
 def create_app() -> FastAPI:
@@ -493,27 +597,7 @@ def create_app() -> FastAPI:
             cam.setdefault("longitude", 0.0)
 
         # Save to config and persist
-        config.CAMERAS = cameras
-        overrides = {"CAMERAS": cameras}
-
-        # Keep legacy single-camera fields in sync with the first camera
-        if cameras:
-            first = cameras[0]
-            overrides["CAMERA_ID"] = first.get("id", "CAM_001")
-            overrides["CAMERA_DESCRIPTION"] = first.get("description", "")
-            overrides["CAMERA_TYPE"] = first.get("type", "rtsp")
-            overrides["RTSP_URL"] = first.get("url", "")
-            overrides["RTSP_TRANSPORT"] = first.get("transport", "tcp")
-            overrides["FRAME_WIDTH"] = first.get("width", 1280)
-            overrides["FRAME_HEIGHT"] = first.get("height", 720)
-            overrides["GPS_LATITUDE"] = first.get("latitude", 0)
-            overrides["GPS_LONGITUDE"] = first.get("longitude", 0)
-            # Apply to runtime config too
-            for k, v in overrides.items():
-                if k != "CAMERAS":
-                    setattr(config, k, v)
-
-        config.save_overrides(overrides)
+        _persist_cameras(cameras)
 
         # Hot reload cameras without restart. Off the event loop: starting a
         # camera waits up to 15s for its first frame, and doing that inline
@@ -522,6 +606,43 @@ def create_app() -> FastAPI:
             await run_in_threadpool(_manager.reload_cameras)
 
         return {"saved": len(cameras), "message": "Cameras updated and applied."}
+
+    @app.get("/api/cameras/discovery")
+    async def discovery_status():
+        """What rediscovery is doing, per camera."""
+        if _discovery is None:
+            return {"enabled": False, "cameras": {}}
+        return _discovery.status()
+
+    @app.post("/api/cameras/{cam_id}/rediscover")
+    async def force_rediscover(request: Request, cam_id: str):
+        """Search for this camera now, without waiting out the grace period."""
+        err = _require_role(request, "admin")
+        if err: return err
+        if _discovery is None:
+            return JSONResponse({"error": "Rediscovery unavailable"}, status_code=503)
+        if not _discovery.request_scan(cam_id):
+            return JSONResponse({"error": "Unknown camera"}, status_code=404)
+        result = await _discovery.run_once(force_ids=[cam_id])
+        return {"camera": cam_id, "result": result}
+
+    @app.post("/api/cameras/{cam_id}/rediscover/adopt")
+    async def adopt_discovered(request: Request, cam_id: str):
+        """Pick one of several matching devices by hand."""
+        err = _require_role(request, "admin")
+        if err: return err
+        if _discovery is None:
+            return JSONResponse({"error": "Rediscovery unavailable"}, status_code=503)
+        body = await request.json()
+        host = (body.get("host") or "").strip()
+        if not host:
+            return JSONResponse({"error": "host is required"}, status_code=400)
+        # Only a host this camera actually offered may be adopted, so this
+        # cannot be used to repoint a camera at an arbitrary address.
+        if not await _discovery.adopt(cam_id, host):
+            return JSONResponse({"error": "Not an offered candidate for this camera"},
+                                status_code=400)
+        return {"camera": cam_id, "adopted": host}
 
     @app.post("/api/cameras/{cam_id}/restart")
     async def restart_camera(request: Request, cam_id: str):
@@ -708,6 +829,14 @@ def create_app() -> FastAPI:
         "DETECTION_CONFIDENCE": {"type": "float", "min": 0.1, "max": 0.95, "description": "Min YOLO confidence (raise to cut false positives)", "category": "Detection"},
         "SAVE_ANNOTATED_IMAGES": {"type": "bool", "description": "Draw detection boxes on saved event images (live view always shows them)", "category": "Detection"},
         "DEDUPE_SIMILAR_EVENTS": {"type": "bool", "description": "Skip events whose image looks identical to the previous one", "category": "Detection"},
+        "AUTO_DISCOVERY_ENABLED": {"type": "bool", "description": "Search the local network for a camera that stops responding", "category": "Rediscovery"},
+        "AUTO_DISCOVERY_AUTO_APPLY": {"type": "bool", "description": "Reattach automatically when found (off = report it and wait for you)", "category": "Rediscovery"},
+        "AUTO_DISCOVERY_REQUIRE_SCENE_MATCH": {"type": "bool", "description": "Require the view to match before adopting a camera", "category": "Rediscovery"},
+        "AUTO_DISCOVERY_OFFLINE_GRACE_SECONDS": {"type": "int", "min": 30, "max": 1800, "description": "Seconds offline before searching", "category": "Rediscovery"},
+        "AUTO_DISCOVERY_MIN_INTERVAL_SECONDS": {"type": "int", "min": 60, "max": 86400, "description": "Shortest gap between searches", "category": "Rediscovery"},
+        "AUTO_DISCOVERY_MAX_INTERVAL_SECONDS": {"type": "int", "min": 60, "max": 86400, "description": "Longest gap between searches", "category": "Rediscovery"},
+        "AUTO_DISCOVERY_SUBNET": {"type": "string", "description": "Explicit range to search, e.g. 192.168.1.0/24 (blank = derive from the camera)", "category": "Rediscovery"},
+        "AUTO_DISCOVERY_SCENE_MAX_DIFF": {"type": "float", "min": 1.0, "max": 200.0, "description": "How different the view may look and still count as the same camera", "category": "Rediscovery"},
         "DEDUPE_DIFF_THRESHOLD": {"type": "float", "min": 0.0, "max": 30.0, "description": "How different an image must be to count as new (lower = stricter)", "category": "Detection"},
         "FACE_MIN_NEIGHBORS": {"type": "int", "min": 3, "max": 20, "description": "Face detector strictness (raise to cut false faces on textured surfaces)", "category": "Face Recognition"},
         "FACE_MIN_SIZE_RATIO": {"type": "float", "min": 0.02, "max": 0.5, "description": "Smallest face as a fraction of frame width", "category": "Face Recognition"},

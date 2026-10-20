@@ -121,6 +121,43 @@ DETECTION_CONFIDENCE = 0.6
 # stream always shows boxes regardless of this setting.
 SAVE_ANNOTATED_IMAGES = False
 
+# --- Camera auto-rediscovery ---
+# A camera that reboots can come back on a different DHCP lease; the capture
+# backend would retry the old address forever and the system stays blind. When
+# a camera has been silent long enough to rule out a reboot, scan its subnet
+# for a host serving the same stream, verify it really is the same camera, then
+# reattach and persist the new address.
+#
+# The scan range is derived from the camera's OWN configured address, never
+# from a local interface: in Docker the container sits on a bridge network
+# (172.x) while the camera is on the LAN, so local interfaces would send the
+# search somewhere useless.
+#
+# Note the trade-off: verifying a candidate means connecting to it with the
+# camera's credentials. Only hosts already listening on the RTSP port are ever
+# tried, which on a home subnet is a handful, but a hostile device listening
+# there could harvest them. Disable this, or pin AUTO_DISCOVERY_SUBNET, on a
+# network you do not trust. A DHCP reservation on the router avoids the whole
+# problem and is the better fix where you can set one.
+AUTO_DISCOVERY_ENABLED = True
+AUTO_DISCOVERY_AUTO_APPLY = True          # False: report a find, never rewrite config
+AUTO_DISCOVERY_CHECK_INTERVAL_SECONDS = 15
+AUTO_DISCOVERY_OFFLINE_GRACE_SECONDS = 120   # longer than a cold boot + reconnect ceiling
+AUTO_DISCOVERY_FAST_GRACE_SECONDS = 30       # old address refuses the port: it is gone, not booting
+AUTO_DISCOVERY_MIN_INTERVAL_SECONDS = 300    # first retry gap, doubling from here
+AUTO_DISCOVERY_MAX_INTERVAL_SECONDS = 1800   # never slower than this, and never gives up
+AUTO_DISCOVERY_SUBNET = ""                   # explicit CIDR; overrides the derived range
+AUTO_DISCOVERY_SUBNET_PREFIX = 24
+AUTO_DISCOVERY_MAX_HOSTS = 512               # refuse to sweep anything larger
+AUTO_DISCOVERY_PORT_TIMEOUT = 0.5
+AUTO_DISCOVERY_PORT_CONCURRENCY = 32
+AUTO_DISCOVERY_VERIFY_TIMEOUT_SECONDS = 6.0
+AUTO_DISCOVERY_MIN_FRAMES = 2                # a stream that opens then dies is not a camera
+AUTO_DISCOVERY_REQUIRE_RESOLUTION_MATCH = True
+AUTO_DISCOVERY_REQUIRE_SCENE_MATCH = True    # the check that rejects a stranger's camera
+AUTO_DISCOVERY_SCENE_MAX_DIFF = 45.0         # generous: day/night IR shifts the scene a lot
+AUTO_DISCOVERY_SCAN_TIMEOUT_SECONDS = 180    # a hung search must not wedge the feature
+
 # Drop an event whose image is visually indistinguishable from the last one
 # saved. A motionless scene that keeps re-triggering writes the same picture
 # repeatedly; there is nothing new to look at and it buries real events.
@@ -252,6 +289,8 @@ _ENV_MAP = {
     "STREAM_JPEG_QUALITY": ("STREAM_JPEG_QUALITY", int),
     "DEFAULT_AI_MODE": ("DEFAULT_AI_MODE", str),
     "ANPR_ENABLED": ("ANPR_ENABLED", lambda v: v.lower() in ("true", "1", "yes")),
+    "AUTO_DISCOVERY_ENABLED": ("AUTO_DISCOVERY_ENABLED", lambda v: v.lower() in ("true", "1", "yes")),
+    "AUTO_DISCOVERY_SUBNET": ("AUTO_DISCOVERY_SUBNET", str),
 }
 
 for _env_key, (_config_key, _cast) in _ENV_MAP.items():

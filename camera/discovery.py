@@ -372,7 +372,9 @@ class DiscoveryTarget:
     url: str                                  # real, never logged
     transport: str = "tcp"
     expect_size: tuple[int, int] | None = None
-    expect_signature=None
+    # Annotated so dataclass treats it as a field; without the annotation it
+    # silently becomes a shared class attribute instead.
+    expect_signature: object = None
 
 
 @dataclass
