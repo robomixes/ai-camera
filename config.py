@@ -3,12 +3,18 @@
 import os
 import json
 import logging
+import tempfile
+import threading
 
 _logger = logging.getLogger(__name__)
 
 # --- Runtime Overrides (persisted across restarts) ---
 _CONFIG_DIR = os.path.join("data", "config") if os.path.isdir(os.path.join("data", "config")) else "."
 _OVERRIDES_FILE = os.path.join(_CONFIG_DIR, "config_overrides.json")
+
+# Serialises the read-merge-write in save_overrides(). The dashboard and the
+# background rediscovery task can both persist settings.
+_overrides_lock = threading.RLock()
 
 # Keys the user has explicitly saved from the dashboard. Environment variables act
 # as first-boot defaults only, so a saved setting is never silently reverted on restart.
@@ -34,18 +40,45 @@ def overrides_path() -> str:
 
 
 def save_overrides(settings: dict):
-    """Save runtime settings to JSON file for persistence."""
-    # Read existing overrides and merge
-    existing = {}
-    if os.path.exists(_OVERRIDES_FILE):
+    """Save runtime settings to JSON file for persistence.
+
+    Serialised and atomic. Two writers previously raced here: the read-merge
+    then truncate-and-write is not atomic, so one save could silently drop
+    another's changes, and a crash mid-write left invalid JSON. That is worse
+    than it sounds — _load_overrides() swallows a parse error with a warning,
+    so the next start would quietly revert EVERY persisted setting to its
+    default with nothing in the UI to say so.
+    """
+    with _overrides_lock:
+        existing = {}
+        if os.path.exists(_OVERRIDES_FILE):
+            try:
+                with open(_OVERRIDES_FILE, 'r') as f:
+                    existing = json.load(f)
+            except Exception:
+                pass
+        existing.update(settings)
+
+        # Write beside the target, flush all the way to disk, then swap it in:
+        # os.replace is atomic, so a reader sees either the old file or the new
+        # one and never a half-written one.
+        directory = os.path.dirname(_OVERRIDES_FILE) or "."
+        tmp_path = None
         try:
-            with open(_OVERRIDES_FILE, 'r') as f:
-                existing = json.load(f)
-        except Exception:
-            pass
-    existing.update(settings)
-    with open(_OVERRIDES_FILE, 'w') as f:
-        json.dump(existing, f, indent=2)
+            fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".overrides-", suffix=".tmp")
+            with os.fdopen(fd, 'w') as f:
+                json.dump(existing, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, _OVERRIDES_FILE)
+            tmp_path = None
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
     _logger.info(f"Saved {len(settings)} setting(s) to {_OVERRIDES_FILE}")
 
 # --- Camera Identity & Location ---
@@ -145,7 +178,7 @@ MENU_DEFAULT_CHOICE = '5'  # The default option to pick on timeout (e.g., '5' fo
 
 # --- Camera Backend ---
 CAMERA_TYPE = "rtsp"       # "auto", "picamera", or "rtsp"
-RTSP_URL = "rtsp://admin:AnAs1001kad!@192.168.1.2/h264Preview_01_sub"  # sub-stream for lower latency
+RTSP_URL = "rtsp://USERNAME:PASSWORD@CAMERA_IP/h264Preview_01_main"  # sub-stream for lower latency
 RTSP_TRANSPORT = "tcp"     # "tcp" or "udp"
 FRAME_WIDTH = 1280
 FRAME_HEIGHT = 720
@@ -189,11 +222,11 @@ CAMERAS = []
 # Example:
 # CAMERAS = [
 #     {"id": "CAM_001", "description": "Front Gate", "type": "rtsp",
-#      "url": "rtsp://admin:pass@192.168.1.9/h264Preview_01_sub",
+#      "url": "rtsp://USERNAME:PASSWORD@CAMERA_IP/h264Preview_01_main",
 #      "transport": "tcp", "width": 1280, "height": 720,
 #      "latitude": 48.8584, "longitude": 2.2945, "ai_mode": "both"},
 #     {"id": "CAM_002", "description": "Back Door", "type": "rtsp",
-#      "url": "rtsp://admin:pass@192.168.1.10/h264Preview_01_sub",
+#      "url": "rtsp://USERNAME:PASSWORD@CAMERA_IP/h264Preview_01_main",
 #      "transport": "tcp", "width": 1280, "height": 720,
 #      "latitude": 48.8585, "longitude": 2.2946, "ai_mode": "yolo"},
 # ]

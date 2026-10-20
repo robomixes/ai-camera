@@ -395,3 +395,6 @@ people_search_queue/ready/known_faces.json
 
 # EasyOCR model weights pulled at runtime (~94MB) — not source
 easyocr-models/
+
+# Local secrets (camera credentials)
+.env

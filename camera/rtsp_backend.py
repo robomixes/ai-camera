@@ -4,6 +4,7 @@ import threading
 import time
 import cv2
 from camera.base import CameraBase
+from camera.discovery import mask_url, open_capture_locked
 from camera.frame_buffer import FrameBuffer
 
 logger = logging.getLogger(__name__)
@@ -34,9 +35,9 @@ class RTSPBackend(CameraBase):
         frame = self._buffer.wait_for_frame(timeout=5.0)
         if frame is not None:
             self._height, self._width = frame.shape[:2]
-            logger.info(f"RTSP stream connected: {self._url} ({self._width}x{self._height})")
+            logger.info(f"RTSP stream connected: {mask_url(self._url)} ({self._width}x{self._height})")
         else:
-            logger.warning(f"Warning: No frame received yet from {self._url}")
+            logger.warning(f"Warning: No frame received yet from {mask_url(self._url)}")
 
     def stop(self) -> None:
         self._running = False
@@ -101,15 +102,11 @@ class RTSPBackend(CameraBase):
             self._cap = None
 
     def _open_capture(self) -> cv2.VideoCapture | None:
-        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
-            f"rtsp_transport;{self._transport}"
-            "|stimeout;10000000"
-            "|timeout;10000000"
-        )
-
-        cap = cv2.VideoCapture(self._url, cv2.CAP_FFMPEG)
-        if not cap.isOpened():
-            logger.error(f"Failed to open RTSP stream: {self._url}")
-            cap.release()
+        # Goes through the shared helper because the FFmpeg options are passed
+        # via a process-global env var: two threads opening captures at once
+        # would race, and the loser silently gets the other transport.
+        cap = open_capture_locked(self._url, self._transport, 10.0)
+        if cap is None:
+            logger.error(f"Failed to open RTSP stream: {mask_url(self._url)}")
             return None
         return cap

@@ -1,5 +1,6 @@
 """Manages multiple cameras with their AI runners."""
 import asyncio
+import threading
 import time
 from camera import create_camera
 from camera.base import CameraBase
@@ -61,6 +62,20 @@ class CameraManager:
 
     def __init__(self):
         self._instances: dict[str, CameraInstance] = {}
+        # Guards every mutation of _instances. Reentrant because restart_camera
+        # calls remove_camera + add_camera, and reload_cameras calls
+        # remove_camera. Without it a reload racing a config save could leave a
+        # CameraInstance overwritten but never stopped, orphaning a capture
+        # thread and an AIRunner that keep writing detections forever.
+        self._lock = threading.RLock()
+        # Held for the whole of a reconfigure. Background rediscovery acquires
+        # this non-blocking and skips its turn if a user save holds it, so an
+        # automatic action never competes with a deliberate one.
+        self._reconfigure_lock = threading.RLock()
+
+    @property
+    def reconfigure_lock(self) -> threading.RLock:
+        return self._reconfigure_lock
 
     def _get_camera_configs(self) -> list[dict]:
         """Get camera configs — from CAMERAS list or fallback to single-camera fields."""
@@ -111,25 +126,38 @@ class CameraManager:
         try:
             instance = CameraInstance(cam_cfg)
             instance.start()
-            self._instances[cam_id] = instance
+            with self._lock:
+                # Replacing an entry without stopping it would strand its
+                # capture and AI threads with no owner.
+                displaced = self._instances.get(cam_id)
+                self._instances[cam_id] = instance
+            if displaced is not None:
+                logger.warning(f"Camera '{cam_id}' replaced a running instance — stopping the old one")
+                try:
+                    displaced.stop()
+                except Exception as e:
+                    logger.error(f"Error stopping displaced camera '{cam_id}': {e}")
             logger.info(f"Camera '{cam_id}' started.")
         except Exception as e:
             logger.error(f"Failed to start camera '{cam_id}': {e}")
 
     def stop_all(self):
-        for cam_id, instance in self._instances.items():
+        with self._lock:
+            snapshot = list(self._instances.items())
+            self._instances.clear()
+        for cam_id, instance in snapshot:
             try:
                 instance.stop()
                 logger.info(f"Camera '{cam_id}' stopped.")
             except Exception as e:
                 logger.error(f"Error stopping camera '{cam_id}': {e}")
-        self._instances.clear()
 
     def get_instance(self, camera_id: str = "") -> CameraInstance | None:
         """Get a camera instance by ID, or the first one if ID is empty."""
-        if not camera_id and self._instances:
-            return next(iter(self._instances.values()))
-        return self._instances.get(camera_id)
+        with self._lock:
+            if not camera_id and self._instances:
+                return next(iter(self._instances.values()))
+            return self._instances.get(camera_id)
 
     def get_camera(self, camera_id: str = "") -> CameraBase | None:
         inst = self.get_instance(camera_id)
@@ -142,7 +170,9 @@ class CameraManager:
     def list_cameras(self) -> list[dict]:
         """Return status info for all cameras."""
         result = []
-        for cam_id, inst in self._instances.items():
+        with self._lock:
+            snapshot = list(self._instances.items())
+        for cam_id, inst in snapshot:
             runner = inst.runner
             cam = inst.cam
             has_signal = cam is not None and (
@@ -165,9 +195,10 @@ class CameraManager:
         cam_id = cam_config.get("id")
         if not cam_id:
             return False
-        if cam_id in self._instances:
-            logger.warning(f"Camera '{cam_id}' already exists. Remove first.")
-            return False
+        with self._lock:
+            if cam_id in self._instances:
+                logger.warning(f"Camera '{cam_id}' already exists. Remove first.")
+                return False
         try:
             self._start_one(cam_config)
             return True
@@ -177,12 +208,12 @@ class CameraManager:
 
     def remove_camera(self, cam_id: str) -> bool:
         """Stop and remove a camera at runtime."""
-        inst = self._instances.get(cam_id)
+        with self._lock:
+            inst = self._instances.pop(cam_id, None)
         if not inst:
             return False
         try:
             inst.stop()
-            del self._instances[cam_id]
             logger.info(f"Camera '{cam_id}' removed.")
             return True
         except Exception as e:
@@ -191,7 +222,8 @@ class CameraManager:
 
     def restart_camera(self, cam_id: str) -> bool:
         """Restart a single camera."""
-        inst = self._instances.get(cam_id)
+        with self._lock:
+            inst = self._instances.get(cam_id)
         if not inst:
             return False
         cam_config = inst.config
@@ -199,10 +231,19 @@ class CameraManager:
         return self.add_camera(cam_config)
 
     def reload_cameras(self):
-        """Reload cameras from config — stop removed, start new, restart changed."""
+        """Reload cameras from config — stop removed, start new, restart changed.
+
+        Blocking: starting a camera waits up to 15s for its first frame. Call
+        it off the event loop.
+        """
+        with self._reconfigure_lock:
+            self._reload_cameras_locked()
+
+    def _reload_cameras_locked(self):
         new_configs = self._get_camera_configs()
         new_ids = {c["id"] for c in new_configs}
-        current_ids = set(self._instances.keys())
+        with self._lock:
+            current_ids = set(self._instances.keys())
 
         # Stop cameras that were removed
         for cam_id in current_ids - new_ids:
@@ -214,12 +255,14 @@ class CameraManager:
         to_start = []
         for cam_cfg in new_configs:
             cam_id = cam_cfg["id"]
-            if cam_id not in self._instances:
+            with self._lock:
+                existing = self._instances.get(cam_id)
+            if existing is None:
                 # New camera
                 to_start.append(cam_cfg)
             else:
                 # Check if config changed (URL, type, etc.)
-                old_cfg = self._instances[cam_id].config
+                old_cfg = existing.config
                 if cam_cfg.get("url") != old_cfg.get("url") or cam_cfg.get("type") != old_cfg.get("type"):
                     self.remove_camera(cam_id)
                     to_start.append(cam_cfg)
@@ -237,12 +280,16 @@ class CameraManager:
                         except Exception as e:
                             logger.error(f"Failed to start camera: {e}")
 
-        logger.info(f"Camera reload complete. {len(self._instances)} camera(s) active.")
+        with self._lock:
+            active = len(self._instances)
+        logger.info(f"Camera reload complete. {active} camera(s) active.")
 
     @property
     def camera_ids(self) -> list[str]:
-        return list(self._instances.keys())
+        with self._lock:
+            return list(self._instances.keys())
 
     @property
     def is_multi(self) -> bool:
-        return len(self._instances) > 1
+        with self._lock:
+            return len(self._instances) > 1

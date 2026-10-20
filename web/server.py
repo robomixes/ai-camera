@@ -11,6 +11,7 @@ from pathlib import Path
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import StreamingResponse, JSONResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from sse_starlette.sse import EventSourceResponse
 
@@ -514,9 +515,11 @@ def create_app() -> FastAPI:
 
         config.save_overrides(overrides)
 
-        # Hot reload cameras without restart
+        # Hot reload cameras without restart. Off the event loop: starting a
+        # camera waits up to 15s for its first frame, and doing that inline
+        # freezes the whole app — stream, events, login included.
         if _manager:
-            _manager.reload_cameras()
+            await run_in_threadpool(_manager.reload_cameras)
 
         return {"saved": len(cameras), "message": "Cameras updated and applied."}
 
@@ -961,6 +964,86 @@ def create_app() -> FastAPI:
             face_rec.load_known_faces_from_images()
 
         return {"name": name, "added": saved_files, "total_images": len(db[name])}
+
+    @app.post("/api/faces/enroll-from-event")
+    async def enroll_from_event(request: Request):
+        """Enrol a face by boxing it on an event image that is already on disk.
+
+        Saves a trip through upload: the frame that caught someone is usually the
+        best thing to enrol them from, and it is already stored.
+        """
+        err = _require_role(request, "operator")
+        if err: return err
+        import cv2
+
+        body = await request.json()
+        name = (body.get("name") or "").strip()
+        image_dir = body.get("image_dir") or ""
+        image_path = body.get("image_path") or ""
+        box = body.get("box") or {}
+
+        if not name:
+            return JSONResponse({"error": "Name is required"}, status_code=400)
+
+        # Resolve the directory by key rather than trusting a path from the client.
+        dirs = {
+            "roi": Path(config.ROI_OUTPUT_DIR),
+            "events": Path(config.EVENT_IMAGE_DIR),
+            "plates": Path(getattr(config, "PLATE_IMAGE_DIR", "plate_images")),
+        }
+        base = dirs.get(image_dir)
+        if base is None:
+            return JSONResponse({"error": "Unknown image source"}, status_code=400)
+
+        # The filename must stay a bare name: a client-supplied path could
+        # otherwise walk out of the image directory.
+        safe_name = Path(image_path).name
+        if not safe_name or safe_name != image_path:
+            return JSONResponse({"error": "Invalid image reference"}, status_code=400)
+
+        src = base / safe_name
+        if not src.exists():
+            return JSONResponse({"error": "Event image no longer on disk"}, status_code=404)
+
+        img = cv2.imread(str(src))
+        if img is None:
+            return JSONResponse({"error": "Could not read event image"}, status_code=400)
+
+        ih, iw = img.shape[:2]
+        try:
+            x1 = int(float(box["x"]) * iw)
+            y1 = int(float(box["y"]) * ih)
+            x2 = x1 + int(float(box["w"]) * iw)
+            y2 = y1 + int(float(box["h"]) * ih)
+        except (KeyError, TypeError, ValueError):
+            return JSONResponse({"error": "A face box is required"}, status_code=400)
+
+        # Same 20% padding as the other enrolment paths, so embeddings stay
+        # comparable however a face was added.
+        pad = int(max(x2 - x1, y2 - y1) * 0.2)
+        x1 = max(0, x1 - pad)
+        y1 = max(0, y1 - pad)
+        x2 = min(iw, x2 + pad)
+        y2 = min(ih, y2 + pad)
+        if x2 - x1 < 20 or y2 - y1 < 20:
+            return JSONResponse({"error": "Selected area is too small"}, status_code=400)
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"enroll_{name}_{ts}_event.jpg"
+        cv2.imwrite(str(faces_dir / filename), img[y1:y2, x1:x2])
+
+        with _faces_lock:
+            db = _read_faces_json()
+            created = name not in db
+            if created:
+                db[name] = []
+            db[name].append(filename)
+            _write_faces_json(db)
+            face_rec.load_known_faces_from_images()
+            total = len(db[name])
+
+        logger.info("Enrolled face for '%s' from event image %s", name, safe_name)
+        return {"name": name, "added": filename, "total_images": total, "created": created}
 
     @app.delete("/api/faces/{name}")
     async def delete_person(request: Request, name: str):
