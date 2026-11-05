@@ -236,6 +236,39 @@ def initialize_system():
 # --- Tracking and Cleanup Functions (Updated for Fast Cleanup and Exit Log) ---
 # ----------------------------------------------------------------------
 
+def _skip_duplicate(frame, label: str = "") -> bool:
+    """True when this frame is indistinguishable from the last one saved.
+
+    This module saves its own event images on a separate path from the AI
+    runner, so a guard added there does not apply here — which is exactly how
+    near-duplicate face events kept being written after duplicate suppression
+    was added.
+    """
+    if not getattr(config, "DEDUPE_SIMILAR_EVENTS", True):
+        return False
+    try:
+        from web.event_guard import is_near_duplicate
+        cam = getattr(config, "CAMERA_ID", "") or "camera"
+        threshold = float(getattr(config, "DEDUPE_DIFF_THRESHOLD", 0.3))
+        skip, diff = is_near_duplicate(cam, frame, threshold)
+        if skip:
+            logger.info("Skipping near-duplicate face event for %s (diff %.2f)",
+                        label or "?", diff if diff is not None else -1)
+        return skip
+    except Exception:
+        return False
+
+
+def _record_saved(frame) -> None:
+    """Remember a frame that was actually written."""
+    try:
+        from web.event_guard import record
+        cam = getattr(config, "CAMERA_ID", "") or "camera"
+        record(cam, frame)
+    except Exception:
+        pass
+
+
 def clean_stale_tracks(max_age_seconds=0.5): # FIX 1: Reduced Track Age to 0.5s
     """
     Removes tracked faces that haven't been seen for a while, 
@@ -265,9 +298,18 @@ def clean_stale_tracks(max_age_seconds=0.5): # FIX 1: Reduced Track Age to 0.5s
                  image_filename = f"faces_final_{track_name}_{timestamp_str}.jpg"
                  full_image_path = os.path.join(config.EVENT_IMAGE_DIR, image_filename)
                  
+                 # Same near-duplicate gate the AI runner applies: a motionless
+                 # scene that keeps re-triggering writes the same picture over
+                 # and over and buries the real events.
+                 if _skip_duplicate(entry['best_frame'], track_name):
+                     del LOGGING_BUFFER[track_name]
+                     del TRACKED_FACES[t_id]
+                     continue
+
                  # Save the best frame found
                  cv2.imwrite(full_image_path, entry['best_frame'])
-                 
+                 _record_saved(entry['best_frame'])
+
                  # Log the event to the database
                  db_handler.log_face_detection_event(
                     name=track_name,
@@ -344,9 +386,19 @@ def process_deferred_logs():
                 image_filename = f"faces_best_{name}_{timestamp_str}.jpg"
                 full_image_path = os.path.join(config.EVENT_IMAGE_DIR, image_filename)
 
+                # Same near-duplicate gate as every other save path. The buffer
+                # is still reset below, so a suppressed event starts a fresh
+                # window rather than retrying the identical frame immediately.
+                if _skip_duplicate(entry['best_frame'], name):
+                    entry['last_log_time'] = current_time
+                    entry['best_frame'] = None
+                    entry['best_quality'] = float('inf')
+                    continue
+
                 # Save the best frame found
                 cv2.imwrite(full_image_path, entry['best_frame'])
-                
+                _record_saved(entry['best_frame'])
+
                 # Log the event to the database
                 db_handler.log_face_detection_event(
                     name=name,
@@ -354,7 +406,7 @@ def process_deferred_logs():
                     image_filename=image_filename,
                     is_known=True
                 )
-                
+
                 # --- RESET THE BUFFER ---
                 
                 # Start the next logging window now
@@ -421,6 +473,15 @@ def run_facenet_recognition(frame, picam2_frame_size):
                 int(x / scale), int(y / scale),
                 int(w / scale), int(h / scale)
             ))
+
+        # Drop anything in a region marked as noise. Some fixed features of a
+        # scene read as faces at particular sun angles and no threshold
+        # separates them from real distant faces.
+        import region_filter
+        raw_face_boxes, _dropped = region_filter.filter_boxes(
+            raw_face_boxes, frame.shape[1], frame.shape[0])
+        if _dropped:
+            logger.debug("Ignored %d face detection(s) inside an ignored region", _dropped)
 
         valid_boxes = []
         for (x, y, w, h) in raw_face_boxes:
@@ -512,7 +573,12 @@ def run_facenet_recognition(frame, picam2_frame_size):
                 if current_quality < buffer_entry['best_quality']:
                     buffer_entry['best_quality'] = current_quality
                     buffer_entry['distance'] = distance
-                    buffer_entry['best_frame'] = annotated_frame.copy()
+                    # The clean frame unless boxes were explicitly asked for.
+                    # This path saves its own images, so it has to honour
+                    # SAVE_ANNOTATED_IMAGES itself — it bypasses the AI runner.
+                    keep_boxes = getattr(config, "SAVE_ANNOTATED_IMAGES", False)
+                    buffer_entry['best_frame'] = (
+                        annotated_frame.copy() if keep_boxes else frame.copy())
 
         detected_faces.append((display_name, 1.0 - distance))
 

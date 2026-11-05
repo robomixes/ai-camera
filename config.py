@@ -164,11 +164,17 @@ AUTO_DISCOVERY_SCAN_TIMEOUT_SECONDS = 180    # a hung search must not wedge the 
 # The number is the mean per-pixel difference (0-255) of a 32x32 greyscale
 # thumbnail: lower is stricter, 0 disables by never matching.
 DEDUPE_SIMILAR_EVENTS = True
-# Measured on this camera: consecutive frames of a motionless scene differ by at
-# most 0.03, a person far from the camera by ~1.4, a close object by ~15. 0.3 is
-# ten times the noise floor and still well under the faintest real change — 2.0
-# looked reasonable but would have silently dropped distant people.
-DEDUPE_DIFF_THRESHOLD = 0.3
+# Measured twice, because the first measurement asked the wrong question.
+# Frames captured two seconds apart in a motionless scene differ by at most
+# 0.03 — but real events arrive 5-30s apart, and over that gap sun, shadow and
+# auto-exposure drift the picture. Consecutive SAVED events actually differ by
+# 0.32-0.99 (median 0.45), so a threshold of 0.3 suppressed nothing at all.
+#
+# 1.0 covers the observed duplicate band and still clears the ~1.4 that a person
+# far from the camera produces. That margin is modest: this reduces repeat
+# images of an unchanging scene, it does not replace excluding the region that
+# keeps triggering in the first place.
+DEDUPE_DIFF_THRESHOLD = 1.0
 # --- Face Recognition Paths & Thresholds ---
 # Location of the TFLite model
 FACENET_MODEL_PATH = "facenet.tflite"
@@ -196,7 +202,34 @@ KNOWN_FACES_DB = os.path.join(FACE_IMAGE_BASE_DIR, "known_faces.json")
 FACE_MIN_NEIGHBORS = 15
 FACE_MIN_SIZE_RATIO = 0.05
 
-RECOGNITION_THRESHOLD = 0.9  # If distance is BELOW this, it's a known person.
+# If the embedding distance is BELOW this, the face is called by name.
+#
+# Measured against this camera's own history:
+#   genuine recognitions   Tala avg 0.734, anas avg 0.780 (mostly below 0.82)
+#   a false match on a gateway, named as a known person   0.840 - 0.900
+#
+# At 0.9 the false matches sat just inside the threshold and were logged with a
+# real person's name — 360 of them in one afternoon. 0.82 rejects that whole
+# band while keeping typical genuine recognitions. The cost is that a marginal
+# real frame is reported as Unknown rather than named, which is the better way
+# to be wrong: a missed name is recoverable, a confidently wrong one is not.
+RECOGNITION_THRESHOLD = 0.82
+
+# Parts of the view that should never produce a detection, as fractions of the
+# frame so they survive a resolution change:
+#   [{"x": 0.84, "y": 0.20, "w": 0.16, "h": 0.22, "label": "gateway"}]
+#
+# For a fixed camera, some scene features register as detections at particular
+# times of day and never stop: a gateway whose dark frame and bright opening
+# read as a face, a balustrade that reads as a person under infrared. These
+# land in the same confidence band as genuine distant detections, so no
+# threshold separates them, and they arrive far enough apart that duplicate
+# suppression cannot either. Excluding the region is the only approach that
+# removes the noise without also discarding real detections elsewhere.
+#
+# A detection is dropped only when its CENTRE falls inside a region, so someone
+# walking past one is still detected.
+IGNORE_REGIONS = []
 REJECTION_DISTANCE = 1.4     # If distance is ABOVE this, reject the detection as a non-face artifact.
 INPUT_SIZE = (160, 160)      # FaceNet input size
 

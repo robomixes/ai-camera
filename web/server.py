@@ -607,6 +607,52 @@ def create_app() -> FastAPI:
 
         return {"saved": len(cameras), "message": "Cameras updated and applied."}
 
+    @app.get("/api/regions")
+    async def get_ignore_regions():
+        """Regions of the view that are excluded from detection."""
+        return {"regions": getattr(config, "IGNORE_REGIONS", []) or []}
+
+    @app.post("/api/regions")
+    async def set_ignore_regions(request: Request):
+        """Replace the ignored regions. Coordinates are fractions of the frame."""
+        err = _require_role(request, "operator")
+        if err: return err
+        body = await request.json()
+        regions = body.get("regions")
+        if not isinstance(regions, list):
+            return JSONResponse({"error": "regions must be a list"}, status_code=400)
+
+        clean = []
+        for i, r in enumerate(regions):
+            try:
+                x, y = float(r["x"]), float(r["y"])
+                w, h = float(r["w"]), float(r["h"])
+            except (KeyError, TypeError, ValueError):
+                return JSONResponse({"error": f"Region {i+1} needs numeric x, y, w, h"},
+                                    status_code=400)
+            # Fractions of the frame, so a region cannot be defined outside it
+            # or be so large it silently disables detection altogether.
+            if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
+                return JSONResponse({"error": f"Region {i+1}: x and y must be 0-1"},
+                                    status_code=400)
+            if not (0.0 < w <= 1.0 and 0.0 < h <= 1.0):
+                return JSONResponse({"error": f"Region {i+1}: w and h must be above 0 and at most 1"},
+                                    status_code=400)
+            if w * h > 0.5:
+                return JSONResponse(
+                    {"error": f"Region {i+1} covers over half the frame — that would disable detection"},
+                    status_code=400)
+            entry = {"x": round(x, 4), "y": round(y, 4),
+                     "w": round(w, 4), "h": round(h, 4)}
+            if r.get("label"):
+                entry["label"] = str(r["label"])[:40]
+            clean.append(entry)
+
+        config.IGNORE_REGIONS = clean
+        config.save_overrides({"IGNORE_REGIONS": clean})
+        logger.info("Ignored regions updated: %d region(s)", len(clean))
+        return {"regions": clean, "saved": len(clean)}
+
     @app.get("/api/cameras/discovery")
     async def discovery_status():
         """What rediscovery is doing, per camera."""

@@ -83,6 +83,13 @@ def run_yolov8_detection(frame, frame_size, roi=None, classes_filter=None, conf=
             # --- ROI CHECK (Only applies if roi is provided) ---
             line_h = int(18 * scale)  # line height for stacked text
 
+            # Regions the user has marked as noise: a fixed feature of the
+            # scene that keeps registering as a detection, which no confidence
+            # threshold can separate from a real detection at distance.
+            import region_filter
+            if region_filter.is_ignored(center_x, center_y, w_frame, h_frame):
+                continue
+
             if roi is not None and is_inside_roi(center_x, center_y, roi):
                 color = IGNORED_COLOR
                 cv2.circle(annotated_frame, (center_x, center_y), circle_r, color, -1)
