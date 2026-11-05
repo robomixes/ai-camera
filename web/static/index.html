@@ -168,6 +168,7 @@
                     <div class="no-signal-icon">&#9888;</div>
                     <div class="no-signal-text">No Signal</div>
                     <div class="no-signal-sub">Camera is not responding</div>
+                    <div class="no-signal-retry">Reconnecting&hellip;</div>
                 </div>
                     <div class="video-overlay top-left">
                         <span id="fps-badge" class="badge badge-fps">0 FPS</span>
@@ -511,6 +512,7 @@
                         onclick="event.stopPropagation(); lightboxNav(-1)"
                         title="Previous event (left arrow)" aria-label="Previous event">&#10094;</button>
                 <img id="lightbox-img" src="" alt="Event Image">
+                <div id="lightbox-tagbox" class="lightbox-tagbox" hidden></div>
                 <button id="lightbox-next" class="lightbox-nav lightbox-next"
                         onclick="event.stopPropagation(); lightboxNav(1)"
                         title="Next event (right arrow)" aria-label="Next event">&#10095;</button>
@@ -532,6 +534,17 @@
                 <a id="lightbox-download" class="lightbox-download" href="#" download
                    title="Download image" aria-label="Download image"
                    onclick="event.stopPropagation()">&#10515;</a>
+                <button id="lightbox-tag" class="lightbox-tagbtn"
+                        onclick="event.stopPropagation(); toggleTagMode()"
+                        title="Tag a face in this image">Tag face</button>
+            </div>
+            <div id="lightbox-tagpanel" class="lightbox-tagpanel" hidden onclick="event.stopPropagation()">
+                <input id="lightbox-tagname" list="known-people" placeholder="Name of this person"
+                       autocomplete="off">
+                <datalist id="known-people"></datalist>
+                <button class="btn-enroll" onclick="saveTaggedFace()">Save face</button>
+                <button class="enroll-clear" onclick="cancelTagMode()">Cancel</button>
+                <span id="lightbox-tagstatus" class="lightbox-tagstatus"></span>
             </div>
         </div>
     </div>

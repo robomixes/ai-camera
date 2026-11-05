@@ -48,6 +48,9 @@ function buildLightboxSet(events) {
                 title: eventTitle(ev),
                 subtitle: eventSubtitle(ev),
                 time: ev.timestamp,
+                // kept so a face tagged here can be matched to the file on disk
+                imageDir: dir,
+                imagePath: ev.image_path,
             };
         });
 }
@@ -195,24 +198,32 @@ function updateStatus(connected) {
     const text = document.getElementById("status-text");
     dot.className = "status-dot " + (connected ? "connected" : "disconnected");
     text.textContent = connected ? "Connected" : "Disconnected";
+    setNoSignal(!connected);
+}
+
+// The overlay used to key off fps === 0, but fps is a rolling average: when the
+// camera vanished entirely the backend still reported 1.7 fps for a while, so
+// the live view kept showing a frozen frame with no indication anything was
+// wrong. Connection state is the honest signal.
+function setNoSignal(show) {
+    const noSignal = document.getElementById("no-signal");
+    const streamImg = document.getElementById("stream-img");
+    if (!noSignal || !streamImg) return;
+    if (show) {
+        streamImg.style.display = "none";
+        noSignal.style.display = "flex";
+    } else {
+        streamImg.style.display = "block";
+        noSignal.style.display = "none";
+    }
 }
 
 function updateFPS(fps) {
     document.getElementById("fps-badge").textContent = fps.toFixed(1) + " FPS";
     document.getElementById("stat-fps").textContent = fps.toFixed(1);
 
-    // Show/hide no signal based on FPS
-    const noSignal = document.getElementById("no-signal");
-    const streamImg = document.getElementById("stream-img");
-    if (noSignal && streamImg) {
-        if (fps === 0) {
-            streamImg.style.display = "none";
-            noSignal.style.display = "flex";
-        } else if (streamImg.style.display === "none") {
-            streamImg.style.display = "block";
-            noSignal.style.display = "none";
-        }
-    }
+    // Visibility of the stream is decided by connection state in updateStatus();
+    // a low or zero frame rate on a connected camera is not a disconnection.
 }
 
 function updateMode(mode) {
@@ -624,8 +635,153 @@ function renderLightbox() {
 function lightboxNav(delta) {
     const target = lightboxIndex + delta;
     if (target < 0 || target >= lightboxItems.length) return;
+    // A box drawn on one photo means nothing on the next.
+    if (tagMode) cancelTagMode();
     lightboxIndex = target;
     renderLightbox();
+}
+
+// ----- Tag a face straight from an event image -----
+// The frame that caught someone is usually the best thing to enrol them from,
+// and it is already on disk — so the box travels as fractions and the server
+// crops its own copy rather than the browser re-uploading the picture.
+let tagMode = false;
+let tagBox = null;
+let tagHandlersBound = false;
+
+function toggleTagMode() {
+    if (tagMode) { cancelTagMode(); return; }
+    const item = lightboxItems[lightboxIndex];
+    if (!item || !item.imagePath) {
+        setTagStatus("This image cannot be tagged.", true);
+        return;
+    }
+    stopLightboxPlay();          // drawing and auto-advance do not mix
+    tagMode = true;
+    tagBox = null;
+    document.getElementById("lightbox-tagbox").hidden = true;
+    document.getElementById("lightbox-tagpanel").hidden = false;
+    document.getElementById("lightbox-tag").classList.add("active");
+    document.querySelector(".lightbox-stage").classList.add("tagging");
+    setTagStatus("Drag a box around the face.");
+    bindTagDrawing();
+    loadKnownPeopleList();
+}
+
+function cancelTagMode() {
+    tagMode = false;
+    tagBox = null;
+    const box = document.getElementById("lightbox-tagbox");
+    if (box) box.hidden = true;
+    const panel = document.getElementById("lightbox-tagpanel");
+    if (panel) panel.hidden = true;
+    const btn = document.getElementById("lightbox-tag");
+    if (btn) btn.classList.remove("active");
+    const stage = document.querySelector(".lightbox-stage");
+    if (stage) stage.classList.remove("tagging");
+    setTagStatus("");
+}
+
+function setTagStatus(msg, isError) {
+    const el = document.getElementById("lightbox-tagstatus");
+    if (!el) return;
+    el.textContent = msg || "";
+    el.classList.toggle("error", !!isError);
+}
+
+async function loadKnownPeopleList() {
+    try {
+        const resp = await fetch("/api/faces");
+        const data = await resp.json();
+        const list = document.getElementById("known-people");
+        if (!list) return;
+        list.innerHTML = (data.people || [])
+            .map(pr => '<option value="' + pr.name + '"></option>').join("");
+    } catch (e) { /* the field still accepts a free-typed name */ }
+}
+
+function bindTagDrawing() {
+    if (tagHandlersBound) return;
+    const stage = document.querySelector(".lightbox-stage");
+    const boxEl = document.getElementById("lightbox-tagbox");
+    if (!stage || !boxEl) return;
+    let sx = 0, sy = 0, drawing = false;
+
+    stage.addEventListener("pointerdown", (e) => {
+        if (!tagMode) return;
+        const r = stage.getBoundingClientRect();
+        sx = e.clientX - r.left; sy = e.clientY - r.top;
+        drawing = true;
+        stage.setPointerCapture(e.pointerId);
+        boxEl.hidden = false;
+        boxEl.style.left = sx + "px"; boxEl.style.top = sy + "px";
+        boxEl.style.width = "0px"; boxEl.style.height = "0px";
+        e.preventDefault(); e.stopPropagation();
+    });
+
+    stage.addEventListener("pointermove", (e) => {
+        if (!tagMode || !drawing) return;
+        const r = stage.getBoundingClientRect();
+        const cx = Math.max(0, Math.min(e.clientX - r.left, r.width));
+        const cy = Math.max(0, Math.min(e.clientY - r.top, r.height));
+        boxEl.style.left = Math.min(sx, cx) + "px";
+        boxEl.style.top = Math.min(sy, cy) + "px";
+        boxEl.style.width = Math.abs(cx - sx) + "px";
+        boxEl.style.height = Math.abs(cy - sy) + "px";
+    });
+
+    stage.addEventListener("pointerup", (e) => {
+        if (!tagMode || !drawing) return;
+        drawing = false;
+        const r = stage.getBoundingClientRect();
+        const w = parseFloat(boxEl.style.width), h = parseFloat(boxEl.style.height);
+        if (w < 12 || h < 12) {
+            boxEl.hidden = true; tagBox = null;
+            setTagStatus("Drag a box around the face.");
+            return;
+        }
+        tagBox = {
+            x: parseFloat(boxEl.style.left) / r.width,
+            y: parseFloat(boxEl.style.top) / r.height,
+            w: w / r.width,
+            h: h / r.height,
+        };
+        setTagStatus("Now enter a name and save.");
+        e.stopPropagation();
+    });
+    tagHandlersBound = true;
+}
+
+async function saveTaggedFace() {
+    const item = lightboxItems[lightboxIndex];
+    const nameEl = document.getElementById("lightbox-tagname");
+    const name = (nameEl.value || "").trim();
+    if (!tagBox) { setTagStatus("Draw a box around the face first.", true); return; }
+    if (!name) { setTagStatus("Enter a name.", true); return; }
+
+    setTagStatus("Saving...");
+    try {
+        const resp = await fetch("/api/faces/enroll-from-event", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                name: name,
+                image_dir: item.imageDir,
+                image_path: item.imagePath,
+                box: tagBox,
+            }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) { setTagStatus(data.error || "Could not save.", true); return; }
+        setTagStatus((data.created ? "Created " : "Added to ") + data.name +
+                     " — " + data.total_images + " photo(s).");
+        nameEl.value = "";
+        tagBox = null;
+        document.getElementById("lightbox-tagbox").hidden = true;
+        if (typeof loadFaces === "function") loadFaces();
+    } catch (e) {
+        setTagStatus("Could not save.", true);
+    }
 }
 
 // ----- Playback: step through the events like frames of a video -----
@@ -688,6 +844,7 @@ function setLightboxSpeed(ms) {
 function openLightboxAt(items, index) {
     if (!items || !items.length) return;
     stopLightboxPlay();
+    cancelTagMode();
     lightboxItems = items;
     lightboxIndex = Math.max(0, Math.min(index, items.length - 1));
     renderLightbox();
@@ -716,6 +873,7 @@ document.addEventListener("keydown", (e) => {
 function closeLightbox(event) {
     if (event && event.target !== event.currentTarget) return;
     stopLightboxPlay();
+    cancelTagMode();
     document.getElementById("lightbox").classList.remove("active");
 }
 
@@ -2150,6 +2308,7 @@ async function pollStatus() {
         document.getElementById("stat-camera").textContent =
             data.camera_type ? data.camera_type.toUpperCase() : "-";
     } catch (e) {
+        // Could not reach the backend — the stream is certainly not live.
         updateStatus(false);
     }
 }
